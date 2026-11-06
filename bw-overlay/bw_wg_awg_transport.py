@@ -45,7 +45,7 @@ AWG_IP=$(docker inspect -f '{{(index .NetworkSettings.Networks "bridge").IPAddre
 [ -n "$WG_IP" ] && [ -n "$AWG_IP" ] || exit 0
 docker exec "$AWG_CONTAINER" sh -c "ip route show table 201 | grep -q '^default ' || ip route replace blackhole default table 201; ip -4 rule show | grep -Fq 'from $WG_SUBNET lookup 201' || ip -4 rule add pref 120 from '$WG_SUBNET' table 201" || exit 1
 if [ "$AWG_PROTOCOL" = "awg3" ]; then
-  docker exec "$AWG_CONTAINER" sh -c 'if ip link add awgprobe type amneziawg 2>/dev/null; then KMOD_VERSION=$(cat /sys/module/amneziawg/version 2>/dev/null); ip link delete awgprobe 2>/dev/null; case "$KMOD_VERSION" in 3.*|[4-9].*|[1-9][0-9].*) ;; *) export WG_FORCE_USERSPACE=1 ;; esac; fi; ip link show bwexit0 >/dev/null 2>&1 || awg-quick up "$AWG_CONF"' || exit 0
+  docker exec "$AWG_CONTAINER" sh -c "if ip link add awgprobe type amneziawg 2>/dev/null; then KMOD_VERSION=\$(cat /sys/module/amneziawg/version 2>/dev/null); ip link delete awgprobe 2>/dev/null; case \"\$KMOD_VERSION\" in 3.*|[4-9].*|[1-9][0-9].*) ;; *) export WG_FORCE_USERSPACE=1 ;; esac; fi; ip link show bwexit0 >/dev/null 2>&1 || awg-quick up '$AWG_CONF'" || exit 0
 else
   docker exec "$AWG_CONTAINER" sh -c "ip link show bwexit0 >/dev/null 2>&1 || awg-quick up '$AWG_CONF'" || exit 0
 fi
