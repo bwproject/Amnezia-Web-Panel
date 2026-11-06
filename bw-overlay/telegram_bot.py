@@ -275,10 +275,10 @@ def is_running() -> bool:
     return _bot_task is not None and not _bot_task.done()
 
 
-def launch_bot(token: str, load_data_fn: Callable, generate_vpn_link_fn: Callable, save_data_fn: Optional[Callable] = None, self_service_svc=None):
+def launch_bot(token: str, load_data_fn: Callable, generate_vpn_link_fn: Callable, save_data_fn: Optional[Callable] = None, self_service_svc=None, http_client_factory=None):
     global _bot_task
     _bot_task = asyncio.create_task(
-        _run_bot(token, load_data_fn, generate_vpn_link_fn, save_data_fn, self_service_svc),
+        _run_bot(token, load_data_fn, generate_vpn_link_fn, save_data_fn, self_service_svc, http_client_factory),
         name="telegram_bot",
     )
     return _bot_task
@@ -1639,19 +1639,31 @@ async def _user_create_connection(api: TelegramAPI, chat_id: int, panel_user: di
 # ----------------------------------------------------------------------- #
 #  Main polling loop and dispatcher
 # ----------------------------------------------------------------------- #
-async def _run_bot(token: str, load_data_fn: Callable, generate_vpn_link_fn: Callable, save_data_fn: Optional[Callable] = None, self_service_svc=None):
+async def _run_bot(token: str, load_data_fn: Callable, generate_vpn_link_fn: Callable, save_data_fn: Optional[Callable] = None, self_service_svc=None, http_client_factory=None):
     offset = 0
     logger.info("Telegram bot started (raw httpx polling).")
 
-    async with httpx.AsyncClient() as client:
+    client_context = http_client_factory() if http_client_factory else httpx.AsyncClient()
+    async with client_context as client:
         api = TelegramAPI(token, client)
 
-        me = await api.call("getMe")
+        while True:
+            try:
+                me = await api.call("getMe")
+                break
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"Telegram bot: getMe failed; retrying in 5s: {e}")
+                await asyncio.sleep(5)
         if not me.get("ok"):
             logger.error(f"Telegram bot: invalid token or API error: {me}")
             return
         logger.info(f"Telegram bot logged in as @{me['result']['username']}")
-        await _set_default_commands(api)
+        try:
+            await _set_default_commands(api)
+        except Exception as e:
+            logger.warning(f"Telegram bot: could not set default commands: {e}")
 
         while True:
             try:
