@@ -134,6 +134,7 @@ class TelegramExitHTTPClient:
         if not installed_exit:
             raise httpx.ConnectError("Selected Telegram Exit Node is no longer installed")
 
+        last_error = None
         for server in servers:
             protocols = server.get("protocols") or {}
             for protocol, record in protocols.items():
@@ -144,10 +145,19 @@ class TelegramExitHTTPClient:
                 link = record.get("exit_link") or {}
                 if link.get("exit_uid") != exit_uid or link.get("stale"):
                     continue
-                return server, str(protocol)
+                try:
+                    ssh = self._dedicated_ssh(server)
+                    awg = AWGManager(ssh)
+                    status = awg.exit_link_status(str(protocol))
+                    if status and status.get("up"):
+                        return server, str(protocol), ssh, awg
+                    last_error = "Exit Node tunnel handshake is not active"
+                except Exception as exc:
+                    last_error = str(exc)
 
+        detail = f": {last_error}" if last_error else ""
         raise httpx.ConnectError(
-            "Selected Telegram Exit Node has no active linked AmneziaWG instance"
+            "Selected Telegram Exit Node has no active linked AmneziaWG instance" + detail
         )
 
     def _dedicated_ssh(self, server):
@@ -180,15 +190,8 @@ class TelegramExitHTTPClient:
 
     def _post_via_exit(self, url, body, content_type, timeout_seconds, exit_uid):
         data = self._load_data()
-        server, protocol = self._find_entry(data, exit_uid)
         try:
-            ssh = self._dedicated_ssh(server)
-            awg = AWGManager(ssh)
-            link_status = awg.exit_link_status(protocol)
-            if not link_status or not link_status.get("up"):
-                raise httpx.ConnectError(
-                    "Selected AmneziaWG Exit Node tunnel has no recent handshake"
-                )
+            server, protocol, ssh, awg = self._find_entry(data, exit_uid)
             container_name = awg._container_name(protocol)
             source_ip = awg._get_subnet_ip(protocol)
             ipaddress.ip_address(source_ip)
