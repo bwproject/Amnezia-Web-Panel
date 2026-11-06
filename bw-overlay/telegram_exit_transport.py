@@ -184,6 +184,11 @@ class TelegramExitHTTPClient:
         try:
             ssh = self._dedicated_ssh(server)
             awg = AWGManager(ssh)
+            link_status = awg.exit_link_status(protocol)
+            if not link_status or not link_status.get("up"):
+                raise httpx.ConnectError(
+                    "Selected AmneziaWG Exit Node tunnel has no recent handshake"
+                )
             container_name = awg._container_name(protocol)
             source_ip = awg._get_subnet_ip(protocol)
             ipaddress.ip_address(source_ip)
@@ -200,8 +205,9 @@ class TelegramExitHTTPClient:
             "IFS= read -r content_type || exit 65; "
             "IFS= read -r payload_b64 || exit 66; "
             "umask 077; "
-            "tmp_base=/tmp/.bw-telegram-$$; cfg=\"$tmp_base.cfg\"; body_file=\"$tmp_base.body\"; "
-            "trap 'rm -f \"$cfg\" \"$body_file\"' EXIT; "
+            "tmp_dir=$(mktemp -d /tmp/.bw-telegram.XXXXXX) || exit 68; "
+            "cfg=\"$tmp_dir/request.cfg\"; body_file=\"$tmp_dir/request.body\"; "
+            "trap 'rm -rf \"$tmp_dir\"' EXIT; "
             "printf '%s' \"$payload_b64\" | base64 -d > \"$body_file\" || exit 67; "
             "{ printf 'url = \"%s\"\\n' \"$url\"; "
             "printf 'request = \"POST\"\\n'; "
