@@ -85,7 +85,7 @@ class BWAWGWireGuardTransport:
         installed = set(out.splitlines())
         out, _, _ = self.ssh.run_sudo_command("docker ps --format '{{.Names}}'")
         running = set(out.splitlines())
-        for proto in ("awg", "awg__2", "awg__3", "awg2", "awg3", "awg_legacy"):
+        for proto in ("awg", "awg__2", "awg__3", "awg2", "awg3"):
             name = self.awg._container_name(proto)
             if name not in installed:
                 continue
