@@ -153,8 +153,13 @@ class ExitLinkService:
         return exit_manager.add_peer(peer_id, name, public_key)
 
     @staticmethod
-    def _remove_exit_peer(exit_manager, protocol, peer_id=None, public_key=None):
-        return exit_manager.remove_peer(public_key=public_key, peer_id=peer_id)
+    def _remove_exit_peer(exit_manager, protocol, peer_id=None, public_key=None, legacy=False):
+        removed = exit_manager.remove_peer(public_key=public_key, peer_id=peer_id)
+        if legacy and str(protocol).split('__', 1)[0] == 'wireguard':
+            cleanup = getattr(exit_manager, 'remove_legacy_wireguard_peer', None)
+            if cleanup:
+                cleanup(peer_id=peer_id, public_key=public_key)
+        return removed
 
     # ----- persistence under the lock, resolved by uid (indices may shift) -----
 
@@ -388,7 +393,7 @@ class ExitLinkService:
                 try:
                     old_exit, _ = self._exit(data, previous['exit_uid'])
                     old_exit_manager = await self._exit_manager(old_exit)
-                    await asyncio.to_thread(self._remove_exit_peer, old_exit_manager, protocol, peer_id=peer_id)
+                    await asyncio.to_thread(self._remove_exit_peer, old_exit_manager, protocol, peer_id=peer_id, legacy=True)
                 except Exception as err:
                     logger.warning("previous exit %s unreachable, peer left behind: %s", previous['exit_uid'], err)
                     warnings.append('old_exit_unreachable_orphan_peer')
