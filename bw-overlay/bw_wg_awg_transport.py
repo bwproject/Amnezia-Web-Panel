@@ -61,13 +61,13 @@ else
 fi
 # Smart Route: RU and administrator-owned prefixes bypass the AWG Exit Node.
 if [ "${SMARTROUTE_ENABLED:-0}" = 1 ] && [ -d /etc/smartroute ]; then
-  cat /etc/smartroute/ru_v4.cidr /etc/smartroute/own.cidr 2>/dev/null | grep -E '^[0-9]+(\\.[0-9]+){3}/[0-9]+$' | sort -u > /tmp/bw-wg-smartroute.cidr
+  cat /etc/smartroute/ru_v4.cidr /etc/smartroute/own.cidr 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+){3}/[0-9]+$' | sort -u > /tmp/bw-wg-smartroute.cidr
   if [ -s /tmp/bw-wg-smartroute.cidr ] && docker cp /tmp/bw-wg-smartroute.cidr "$WG_CONTAINER:/tmp/bw-wg-smartroute.cidr" >/dev/null 2>&1; then
-    docker exec "$WG_CONTAINER" sh -c 'ip -4 route show table 201 | grep 'proto 186' | while read kind dst rest; do ip -4 route del throw "$dst" table 201 proto 186 2>/dev/null || true; done; while read cidr; do [ -n "$cidr" ] && ip -4 route replace throw "$cidr" table 201 proto 186; done < /tmp/bw-wg-smartroute.cidr'
+    docker exec "$WG_CONTAINER" sh -c 'ip -4 route show table 201 | grep "proto 186" | while read kind dst rest; do ip -4 route del throw "$dst" table 201 proto 186 2>/dev/null || true; done; while read cidr; do [ -n "$cidr" ] && ip -4 route replace throw "$cidr" table 201 proto 186; done < /tmp/bw-wg-smartroute.cidr'
   fi
   rm -f /tmp/bw-wg-smartroute.cidr
 else
-  docker exec "$WG_CONTAINER" sh -c 'ip -4 route show table 201 | grep 'proto 186' | while read kind dst rest; do ip -4 route del throw "$dst" table 201 proto 186 2>/dev/null || true; done' >/dev/null 2>&1 || true
+  docker exec "$WG_CONTAINER" sh -c 'ip -4 route show table 201 | grep "proto 186" | while read kind dst rest; do ip -4 route del throw "$dst" table 201 proto 186 2>/dev/null || true; done' >/dev/null 2>&1 || true
 fi
 docker exec "$AWG_CONTAINER" sh -c "sysctl -w net.ipv4.ip_forward=1 >/dev/null; sysctl -w net.ipv4.conf.bwexit0.rp_filter=2 >/dev/null 2>&1 || true; ip route replace '$WG_SUBNET' via '$WG_IP' dev '$AWG_DEV'; ip route replace default dev bwexit0 table 201; iptables -C FORWARD -i '$AWG_DEV' -o bwexit0 -s '$WG_SUBNET' -j ACCEPT 2>/dev/null || iptables -A FORWARD -i '$AWG_DEV' -o bwexit0 -s '$WG_SUBNET' -j ACCEPT; iptables -C FORWARD -i bwexit0 -o '$AWG_DEV' -d '$WG_SUBNET' -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -i bwexit0 -o '$AWG_DEV' -d '$WG_SUBNET' -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -C POSTROUTING -s '$WG_SUBNET' -o bwexit0 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s '$WG_SUBNET' -o bwexit0 -j MASQUERADE; iptables -t mangle -C FORWARD -i '$AWG_DEV' -o bwexit0 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || iptables -t mangle -A FORWARD -i '$AWG_DEV' -o bwexit0 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu; iptables -t mangle -C FORWARD -i bwexit0 -o '$AWG_DEV' -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || iptables -t mangle -A FORWARD -i bwexit0 -o '$AWG_DEV' -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu" || exit 1
 """
