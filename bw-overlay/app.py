@@ -1231,8 +1231,8 @@ def get_protocol_manager(ssh, protocol: str):
         from managers.nginx_manager import NginxManager
         return NginxManager(ssh, protocol)
     elif base == 'exit':
-        from managers.exit_manager import ExitManager
-        return ExitManager(ssh, protocol)
+        from bw_exit_manager import BWExitManager
+        return BWExitManager(ssh, protocol)
     from managers.awg_manager import AWGManager
     return AWGManager(ssh)
 
