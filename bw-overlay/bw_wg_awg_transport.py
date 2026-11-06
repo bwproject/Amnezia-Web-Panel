@@ -9,7 +9,7 @@ from managers.awg_manager import AWGManager, TRANSIT_PARAM_KEYS, EXIT_MTU, EXIT_
 HOST_SCRIPT = "/usr/local/sbin/bw-wg-awg-router"
 HOST_ENV = "/etc/default/bw-wg-awg-router"
 AWG_DIR = "/opt/amnezia/bw-wg-exit"
-AWG_CONF = AWG_DIR + "/exit0.conf"
+AWG_CONF = AWG_DIR + "/bwexit0.conf"
 AWG_KEY = AWG_DIR + "/exit_private.key"
 AWG_BACKUP = AWG_CONF + ".failover-bak"
 AWG_IFACE = "bwexit0"
