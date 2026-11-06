@@ -4539,6 +4539,10 @@
             box.innerHTML = '';
             return;
         }
+        if (sr.throw_routes != null) {
+            box.innerHTML = `<div class="form-hint">Smart Route active prefixes: ${Number(sr.throw_routes) || 0}</div>`;
+            return;
+        }
         const direct = sr.direct || {};
         const viaExit = sr.via_exit || {};
         const directOut = sr.direct_out || {};
