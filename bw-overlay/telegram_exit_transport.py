@@ -1,23 +1,28 @@
 """Telegram Bot API transport through an existing AmneziaWG Exit Node.
 
-The panel itself is not in the AWG container network namespace.  For selected
-Exit Nodes, each Bot API request is executed by curl inside an already-linked
-AWG protocol container and bound to that instance's gateway address.  This is
-the same source binding used by AWGManager.exit_check_egress(), so the existing
-policy rule routes the request through table 200 and exit0.  No host route,
-published port, proxy daemon, or VPN-client routing change is required.
+Selected requests are executed by curl inside an already-linked AWG protocol
+container. Binding curl to the instance gateway address invokes the same
+source-policy route used by AWGManager.exit_check_egress(): table 200 -> exit0.
+No host route, published port, proxy daemon, or VPN-client routing change is
+required. If the selected route is unavailable, requests fail closed.
 """
 import asyncio
+import base64
 import ipaddress
 import json
+import secrets
 import shlex
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 import httpx
 
 
 _AWG_PROTOCOLS = {"awg", "awg2", "awg3", "awg_legacy"}
 _STATUS_MARKER = "__BW_TELEGRAM_HTTP_STATUS__:"
+
+
+def _safe_multipart_header(value):
+    return str(value or "").replace("\\", "\\\\").replace('"', '\\"').replace("\r", "").replace("\n", "")
 
 
 class TelegramExitHTTPClient:
@@ -39,7 +44,9 @@ class TelegramExitHTTPClient:
     async def post(self, url, json=None, timeout=30, **kwargs):
         parsed = urlsplit(str(url))
         if parsed.scheme != "https" or parsed.hostname != "api.telegram.org":
-            raise httpx.UnsupportedProtocol("Telegram Exit transport only allows https://api.telegram.org")
+            raise httpx.UnsupportedProtocol(
+                "Telegram Exit transport only allows https://api.telegram.org"
+            )
 
         data = self._load_data()
         telegram_settings = ((data.get("settings") or {}).get("telegram") or {})
@@ -47,7 +54,7 @@ class TelegramExitHTTPClient:
         if not exit_uid:
             return await self._direct.post(url, json=json, timeout=timeout, **kwargs)
 
-        payload = {} if json is None else json
+        body, content_type = self._encode_body(json, kwargs.get("data"), kwargs.get("files"), kwargs.get("content"))
         try:
             timeout_seconds = int(float(timeout))
         except (TypeError, ValueError):
@@ -55,8 +62,52 @@ class TelegramExitHTTPClient:
         timeout_seconds = max(5, min(55, timeout_seconds))
 
         return await asyncio.to_thread(
-            self._post_via_exit, str(url), payload, timeout_seconds, exit_uid
+            self._post_via_exit, str(url), body, content_type, timeout_seconds, exit_uid
         )
+
+    @staticmethod
+    def _encode_body(json_payload, data_payload, files_payload, content_payload):
+        if files_payload:
+            boundary = "----BWTelegram" + secrets.token_hex(16)
+            boundary_bytes = boundary.encode("ascii")
+            parts = []
+            for field, value in (data_payload or {}).items():
+                disposition = (
+                    f'Content-Disposition: form-data; name="{_safe_multipart_header(field)}"\r\n\r\n'
+                ).encode("utf-8")
+                parts.extend((b"--" + boundary_bytes + b"\r\n", disposition,
+                              str(value).encode("utf-8"), b"\r\n"))
+            for field, spec in files_payload.items():
+                if isinstance(spec, tuple):
+                    filename = spec[0] if len(spec) > 0 else field
+                    file_content = spec[1] if len(spec) > 1 else b""
+                    mime_type = spec[2] if len(spec) > 2 and spec[2] else "application/octet-stream"
+                else:
+                    filename = field
+                    file_content = spec.read() if hasattr(spec, "read") else spec
+                    mime_type = "application/octet-stream"
+                if isinstance(file_content, str):
+                    file_content = file_content.encode("utf-8")
+                file_header = (
+                    f'Content-Disposition: form-data; name="{_safe_multipart_header(field)}"; '
+                    f'filename="{_safe_multipart_header(filename)}"\r\n'
+                    f"Content-Type: {_safe_multipart_header(mime_type)}\r\n\r\n"
+                ).encode("utf-8")
+                parts.extend((b"--" + boundary_bytes + b"\r\n", file_header,
+                              bytes(file_content or b""), b"\r\n"))
+            parts.append(b"--" + boundary_bytes + b"--\r\n")
+            return b"".join(parts), f"multipart/form-data; boundary={boundary}"
+
+        if content_payload is not None:
+            if isinstance(content_payload, str):
+                content_payload = content_payload.encode("utf-8")
+            return bytes(content_payload), "application/octet-stream"
+
+        if data_payload is not None:
+            return urlencode(data_payload, doseq=True).encode("utf-8"), "application/x-www-form-urlencoded"
+
+        payload = {} if json_payload is None else json_payload
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"), "application/json"
 
     def _find_entry(self, data, exit_uid):
         servers = data.get("servers") or []
@@ -84,7 +135,7 @@ class TelegramExitHTTPClient:
             "Selected Telegram Exit Node has no active linked AmneziaWG instance"
         )
 
-    def _post_via_exit(self, url, payload, timeout_seconds, exit_uid):
+    def _post_via_exit(self, url, body, content_type, timeout_seconds, exit_uid):
         data = self._load_data()
         server, protocol = self._find_entry(data, exit_uid)
         try:
@@ -98,24 +149,25 @@ class TelegramExitHTTPClient:
                 f"Cannot prepare selected Telegram Exit Node route: {exc}"
             ) from exc
 
-        # Read the URL as the first stdin line. curl then receives the JSON body
-        # from the remaining stdin, keeping the bot token out of process args
-        # and SSH command logs.
+        # URL, content type and body are passed through stdin, not process args.
+        # Base64 keeps multipart file bytes safe through the SSH text channel.
+        encoded_body = base64.b64encode(body).decode("ascii")
         inner_script = (
             "IFS= read -r url || exit 64; "
-            f"exec curl --interface {shlex.quote(source_ip)} "
+            "IFS= read -r content_type || exit 65; "
+            "IFS= read -r payload_b64 || exit 66; "
+            "printf '%s' \"$payload_b64\" | "
+            f"curl --interface {shlex.quote(source_ip)} "
             "--silent --show-error --connect-timeout 10 "
             f"--max-time {timeout_seconds} "
-            "--request POST --header 'Content-Type: application/json' "
+            "--request POST --header \"Content-Type: $content_type\" "
             f"--data-binary @- --write-out '\\n{_STATUS_MARKER}%{{http_code}}' \"$url\""
         )
         command = (
             f"docker exec -i {shlex.quote(container_name)} "
             f"sh -c {shlex.quote(inner_script)}"
         )
-        stdin_payload = (
-            url + "\n" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-        )
+        stdin_payload = f"{url}\n{content_type}\n{encoded_body}"
 
         if getattr(ssh, "_is_root", False):
             remote_command = command
@@ -140,7 +192,7 @@ class TelegramExitHTTPClient:
             raise httpx.ConnectError(
                 "Telegram Exit Node returned no HTTP status; refusing direct fallback"
             )
-        body, status_text = out.rsplit(_STATUS_MARKER, 1)
+        response_body, status_text = out.rsplit(_STATUS_MARKER, 1)
         try:
             status_code = int(status_text.strip().splitlines()[0])
         except (ValueError, IndexError):
@@ -150,6 +202,6 @@ class TelegramExitHTTPClient:
 
         return httpx.Response(
             status_code=status_code,
-            content=body.encode("utf-8"),
+            content=response_body.encode("utf-8"),
             request=httpx.Request("POST", url),
         )

@@ -5553,6 +5553,23 @@ def _smartroute_error(e: SmartRouteError):
     return JSONResponse({'error': e.code, 'message': str(e)}, status_code=e.status_code)
 
 
+def _telegram_exit_available(data, exit_uid):
+    servers = data.get('servers') or []
+    for item in exit_link_svc.linked_entries(data, exit_uid):
+        if item.get('stale'):
+            continue
+        server_id = item.get('server_id')
+        if not isinstance(server_id, int) or not 0 <= server_id < len(servers):
+            continue
+        protocol = item.get('protocol') or ''
+        if protocol_base(protocol) not in AWG_PROTOCOLS:
+            continue
+        record = ((servers[server_id].get('protocols') or {}).get(protocol) or {})
+        if record.get('installed'):
+            return True
+    return False
+
+
 @app.get('/api/exit-nodes', tags=["Servers"])
 def api_exit_nodes(request: Request):
     """Servers with an installed exit node, from data.json (no SSH)."""
@@ -5561,8 +5578,7 @@ def api_exit_nodes(request: Request):
     data = load_data()
     nodes = exit_link_svc.list_exit_nodes(data)
     for node in nodes:
-        linked = exit_link_svc.linked_entries(data, node['uid'])
-        node['telegram_available'] = any(not item.get('stale') for item in linked)
+        node['telegram_available'] = _telegram_exit_available(data, node['uid'])
     return {'status': 'success', 'exit_nodes': nodes}
 
 
@@ -8795,8 +8811,7 @@ def save_settings(request: Request, payload: SaveSettingsRequest):
     telegram_exit_uid = (payload.telegram.exit_uid or '').strip()
     if telegram_exit_uid:
         installed_exit_uids = {node['uid'] for node in exit_link_svc.list_exit_nodes(data)}
-        linked_entries = exit_link_svc.linked_entries(data, telegram_exit_uid)
-        if telegram_exit_uid not in installed_exit_uids or not any(not item.get('stale') for item in linked_entries):
+        if telegram_exit_uid not in installed_exit_uids or not _telegram_exit_available(data, telegram_exit_uid):
             telegram_exit_uid = ''
             warnings.append('telegram_exit_unavailable')
     settings['telegram']['exit_uid'] = telegram_exit_uid
