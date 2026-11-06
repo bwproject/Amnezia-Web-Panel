@@ -4,7 +4,10 @@ import re
 import shlex
 import time
 
-from managers.awg_manager import (\n    AWGManager, TRANSIT_PARAM_KEYS, EXIT_MTU, EXIT_HANDSHAKE_UP_SECONDS,\n    EXIT_CONF, EXIT_CONF_BACKUP, EXIT_IFACE, EXIT_TABLE,\n)
+from managers.awg_manager import (
+    AWGManager, TRANSIT_PARAM_KEYS, EXIT_MTU, EXIT_HANDSHAKE_UP_SECONDS,
+    EXIT_CONF, EXIT_CONF_BACKUP, EXIT_IFACE, EXIT_TABLE,
+)
 
 HOST_SCRIPT = "/usr/local/sbin/bw-wg-awg-router"
 HOST_ENV = "/etc/default/bw-wg-awg-router"
