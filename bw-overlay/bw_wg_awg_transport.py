@@ -38,12 +38,17 @@ AWG_RUNNING=$(docker inspect -f '{{.State.Running}}' "$AWG_CONTAINER" 2>/dev/nul
 [ "$WG_RUNNING" = true ] || exit 0
 # Install a blackhole first: if AWG is stopped or its tunnel cannot start,
 # standard WireGuard clients never fall back to the entry server's WAN.
-docker exec "$WG_CONTAINER" sh -c "ip route replace blackhole default table 201; ip rule del pref 120 from '$WG_SUBNET' table 201 2>/dev/null || true; ip rule add pref 120 from '$WG_SUBNET' table 201" || exit 1
+docker exec "$WG_CONTAINER" sh -c "ip route show table 201 | grep -q '^default ' || ip route replace blackhole default table 201; ip -4 rule show | grep -Fq 'from $WG_SUBNET lookup 201' || ip -4 rule add pref 120 from '$WG_SUBNET' table 201" || exit 1
 [ "$AWG_RUNNING" = true ] || exit 0
 WG_IP=$(docker inspect -f '{{(index .NetworkSettings.Networks "bridge").IPAddress}}' "$WG_CONTAINER" 2>/dev/null || true)
 AWG_IP=$(docker inspect -f '{{(index .NetworkSettings.Networks "bridge").IPAddress}}' "$AWG_CONTAINER" 2>/dev/null || true)
 [ -n "$WG_IP" ] && [ -n "$AWG_IP" ] || exit 0
-docker exec "$AWG_CONTAINER" sh -c "ip link show bwexit0 >/dev/null 2>&1 || awg-quick up '$AWG_CONF'" || exit 0
+docker exec "$AWG_CONTAINER" sh -c "ip route show table 201 | grep -q '^default ' || ip route replace blackhole default table 201; ip -4 rule show | grep -Fq 'from $WG_SUBNET lookup 201' || ip -4 rule add pref 120 from '$WG_SUBNET' table 201" || exit 1
+if [ "$AWG_PROTOCOL" = "awg3" ]; then
+  docker exec "$AWG_CONTAINER" sh -c 'if ip link add awgprobe type amneziawg 2>/dev/null; then KMOD_VERSION=$(cat /sys/module/amneziawg/version 2>/dev/null); ip link delete awgprobe 2>/dev/null; case "$KMOD_VERSION" in 3.*|[4-9].*|[1-9][0-9].*) ;; *) export WG_FORCE_USERSPACE=1 ;; esac; fi; ip link show bwexit0 >/dev/null 2>&1 || awg-quick up "$AWG_CONF"' || exit 0
+else
+  docker exec "$AWG_CONTAINER" sh -c "ip link show bwexit0 >/dev/null 2>&1 || awg-quick up '$AWG_CONF'" || exit 0
+fi
 WG_DEV=$(docker exec "$WG_CONTAINER" sh -c "ip route get '$AWG_IP' | awk '{for(i=1;i<=NF;i++) if(\$i==\"dev\"){print \$(i+1); exit}}'" 2>/dev/null || true)
 AWG_DEV=$(docker exec "$AWG_CONTAINER" sh -c "ip route get '$WG_IP' | awk '{for(i=1;i<=NF;i++) if(\$i==\"dev\"){print \$(i+1); exit}}'" 2>/dev/null || true)
 [ -n "$WG_DEV" ] || WG_DEV=eth0
@@ -54,7 +59,7 @@ if [ "${DNS_VIA_EXIT:-0}" != 1 ]; then
 else
   docker exec "$WG_CONTAINER" sh -c "ip route del throw 172.29.172.0/24 table 201 2>/dev/null || true" >/dev/null 2>&1 || true
 fi
-docker exec "$AWG_CONTAINER" sh -c "sysctl -w net.ipv4.ip_forward=1 >/dev/null; ip route replace '$WG_SUBNET' via '$WG_IP' dev '$AWG_DEV'; ip route replace blackhole default table 201; ip rule del pref 120 from '$WG_SUBNET' table 201 2>/dev/null || true; ip rule add pref 120 from '$WG_SUBNET' table 201; ip route replace default dev bwexit0 table 201; iptables -C FORWARD -i '$AWG_DEV' -o bwexit0 -s '$WG_SUBNET' -j ACCEPT 2>/dev/null || iptables -A FORWARD -i '$AWG_DEV' -o bwexit0 -s '$WG_SUBNET' -j ACCEPT; iptables -C FORWARD -i bwexit0 -o '$AWG_DEV' -d '$WG_SUBNET' -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -i bwexit0 -o '$AWG_DEV' -d '$WG_SUBNET' -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -C POSTROUTING -s '$WG_SUBNET' -o bwexit0 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s '$WG_SUBNET' -o bwexit0 -j MASQUERADE" || exit 1
+docker exec "$AWG_CONTAINER" sh -c "sysctl -w net.ipv4.ip_forward=1 >/dev/null; ip route replace '$WG_SUBNET' via '$WG_IP' dev '$AWG_DEV'; ip route replace default dev bwexit0 table 201; iptables -C FORWARD -i '$AWG_DEV' -o bwexit0 -s '$WG_SUBNET' -j ACCEPT 2>/dev/null || iptables -A FORWARD -i '$AWG_DEV' -o bwexit0 -s '$WG_SUBNET' -j ACCEPT; iptables -C FORWARD -i bwexit0 -o '$AWG_DEV' -d '$WG_SUBNET' -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -i bwexit0 -o '$AWG_DEV' -d '$WG_SUBNET' -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -C POSTROUTING -s '$WG_SUBNET' -o bwexit0 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s '$WG_SUBNET' -o bwexit0 -j MASQUERADE" || exit 1
 """
 
 class BWAWGWireGuardTransport:
@@ -113,6 +118,7 @@ class BWAWGWireGuardTransport:
             "ENABLED": "1" if enabled else "0",
             "WG_CONTAINER": WG_CONTAINER,
             "AWG_CONTAINER": self.container,
+            "AWG_PROTOCOL": self.protocol.split("__", 1)[0],
             "WG_SUBNET": subnet,
             "AWG_CONF": AWG_CONF,
             "DNS_VIA_EXIT": "1" if dns_via_exit else "0",
