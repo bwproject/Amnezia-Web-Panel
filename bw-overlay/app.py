@@ -1760,8 +1760,8 @@ def _mail_error_response(exc: MailError, lang: str):
 
 
 def _exit_manager_factory(ssh):
-    from managers.exit_manager import ExitManager
-    return ExitManager(ssh)
+    from bw_exit_manager import BWExitManager
+    return BWExitManager(ssh)
 
 
 exit_link_svc = ExitLinkService(
@@ -5466,8 +5466,8 @@ def api_socks5_update_credentials(request: Request, server_id: int, req: Socks5S
 
 
 def _exit_manager_for(ssh):
-    from managers.exit_manager import ExitManager
-    return ExitManager(ssh)
+    from bw_exit_manager import BWExitManager
+    return BWExitManager(ssh)
 
 
 @app.post('/api/servers/{server_id}/exit/peers', tags=["Protocols"])
