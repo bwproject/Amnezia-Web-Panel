@@ -26,7 +26,7 @@ class BWExitManager(ExitManager):
             match = re.search(r"^# peerId = (.+)$", block, re.M)
             return match.group(1).strip() if match else ""
         def block_key(block):
-            match = re.search(r"^PublicKey\\s*=\\s*(.+)$", block, re.M)
+            match = re.search(r"^PublicKey\s*=\s*(.+)$", block, re.M)
             return match.group(1).strip() if match else ""
         kept = [
             block for block in blocks
