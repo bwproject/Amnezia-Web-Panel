@@ -45,6 +45,14 @@ jobs:
             rsync -a --exclude='.keep' bw-custom/bw-overlay/ source/
           fi
 
+      - name: Validate Python syntax
+        run: |
+          docker run --rm \\
+            -v "$GITHUB_WORKSPACE/source:/app" \\
+            -w /app \\
+            python:3.14-slim \\
+            python -c "import ast, pathlib; files=('app.py', 'telegram_bot.py', 'telegram_exit_transport.py'); [ast.parse(pathlib.Path(name).read_text(encoding='utf-8'), filename=name) for name in files]; print('Python syntax OK')"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
