@@ -219,11 +219,11 @@ class BWAWGWireGuardTransport:
 
     def exit_link(self, protocol_type, link):
         self._write_config(link)
-        result = self._apply(bool(link.get("dns_via_exit")))
-        # The new AWG route is active now, so it is safe to retire an older
-        # WG-container exit0 link left by a previous BW build.
-        self._cleanup_legacy_wg_exit()
-        return result
+        return self._apply(bool(link.get("dns_via_exit")))
+
+    def exit_cleanup_legacy(self):
+        # Called only after the replacement AWG peer has completed handshake.
+        return self._cleanup_legacy_wg_exit()
 
     def exit_unlink(self, protocol_type):
         self._install_router(False, False)
