@@ -448,7 +448,7 @@ class ExitLinkService:
                 exit_srv, _ = self._exit(data, link.get('exit_uid'))
                 exit_manager = await self._exit_manager(exit_srv)
                 await asyncio.to_thread(self._remove_exit_peer, exit_manager, protocol,
-                                        peer_id=peer_id_for(entry_uid, protocol))
+                                        peer_id=peer_id_for(entry_uid, protocol), legacy=True)
             except Exception as err:
                 logger.warning("exit %s unreachable on unlink, peer left behind: %s", link.get('exit_uid'), err)
                 warnings.append('exit_unreachable_orphan_peer')
@@ -580,7 +580,7 @@ class ExitLinkService:
                     exit_srv, _ = self._exit(data, link['exit_uid'])
                     exit_manager = await self._exit_manager(exit_srv)
                     await asyncio.to_thread(self._remove_exit_peer, exit_manager, proto,
-                                            peer_id=peer_id_for(entry_uid, proto))
+                                            peer_id=peer_id_for(entry_uid, proto), legacy=True)
                     results.append({'protocol': proto, 'exit_uid': link['exit_uid'], 'status': 'success'})
                 except Exception as err:
                     logger.warning("could not drop peer for %s on exit %s: %s", proto, link['exit_uid'], err)
