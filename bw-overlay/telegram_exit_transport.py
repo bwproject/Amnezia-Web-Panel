@@ -158,7 +158,7 @@ class TelegramExitHTTPClient:
 
         detail = f": {last_error}" if last_error else ""
         raise httpx.ConnectError(
-            "Selected Telegram Exit Node has no active linked AmneziaWG instance" + detail
+            "Selected Telegram Exit Node has no active linked AmneziaWG or WireGuard instance" + detail
         )
 
     def _dedicated_ssh(self, server):
