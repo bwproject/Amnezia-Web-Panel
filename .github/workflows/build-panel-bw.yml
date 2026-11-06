@@ -50,6 +50,7 @@ jobs:
           python -m py_compile \
             source/app.py \
             source/exit_link_service.py \
+            source/smartroute_service.py \
             source/telegram_exit_transport.py \
             source/bw_wg_awg_transport.py \
             source/managers/wireguard_exit_manager.py \
