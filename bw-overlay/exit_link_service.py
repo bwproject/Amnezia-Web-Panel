@@ -375,6 +375,17 @@ class ExitLinkService:
                                         f"The link was rolled back")
                 warnings.append('no_handshake_yet')
 
+            # The replacement transport is confirmed. Remove the old
+            # entry-side exit0 route only now, preserving it if handshake fails.
+            if self.protocol_base(protocol) == 'wireguard':
+                cleanup_entry = getattr(awg, 'exit_cleanup_legacy', None)
+                if cleanup_entry:
+                    try:
+                        await asyncio.to_thread(cleanup_entry)
+                    except Exception as err:
+                        logger.warning("legacy entry WireGuard route cleanup failed: %s", err)
+                        warnings.append('legacy_entry_route_cleanup_failed')
+
             # Older BW builds registered standard WG entries on a separate
             # transitwg0 listener. Retire that peer only after the new AWG
             # transport has handshaken, so a failed migration keeps the old path.
