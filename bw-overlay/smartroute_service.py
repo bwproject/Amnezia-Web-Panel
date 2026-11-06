@@ -175,7 +175,7 @@ class SmartRouteService:
     def _entry(self, data, server_id, protocol):
         server = self._server(data, server_id)
         if self.protocol_base(protocol) not in self.awg_protocols and self.protocol_base(protocol) != 'wireguard':
-            raise SmartRouteError('protocol_not_supported', 'Only AmneziaWG and standard WireGuard instances support Smart Route')
+            raise SmartRouteError('protocol_not_awg', 'Only AmneziaWG and standard WireGuard instances support Smart Route')
         rec = (server.get('protocols') or {}).get(protocol) or {}
         link = rec.get('exit_link') or {}
         if not link.get('exit_uid'):
