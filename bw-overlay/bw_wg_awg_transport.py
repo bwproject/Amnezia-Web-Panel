@@ -85,7 +85,7 @@ class BWAWGWireGuardTransport:
         installed = set(out.splitlines())
         out, _, _ = self.ssh.run_sudo_command("docker ps --format '{{.Names}}'")
         running = set(out.splitlines())
-        for proto in ("awg", "awg__2", "awg__3", "awg2", "awg3"):
+        for proto in ("awg3", "awg2", "awg", "awg__3", "awg__2"):
             name = self.awg._container_name(proto)
             if name not in installed:
                 continue
@@ -118,7 +118,7 @@ class BWAWGWireGuardTransport:
             "ENABLED": "1" if enabled else "0",
             "WG_CONTAINER": WG_CONTAINER,
             "AWG_CONTAINER": self.container,
-            "AWG_PROTOCOL": self.protocol.split("__", 1)[0],
+            "AWG_PROTOCOL": self.awg._base_protocol(self.protocol),
             "WG_SUBNET": subnet,
             "AWG_CONF": AWG_CONF,
             "DNS_VIA_EXIT": "1" if dns_via_exit else "0",
@@ -130,7 +130,7 @@ class BWAWGWireGuardTransport:
         if code:
             raise RuntimeError("Automatic WireGuard/AWG routing requires systemd on the entry server")
         service = "[Unit]\nDescription=BW WireGuard via AmneziaWG router\nAfter=docker.service\nRequires=docker.service\n[Service]\nType=oneshot\nExecStart=/usr/local/sbin/bw-wg-awg-router\n"
-        timer = "[Unit]\nDescription=Keep BW WireGuard/AWG routes active\n[Timer]\nOnBootSec=15s\nOnUnitActiveSec=20s\nUnit=bw-wg-awg-router.service\n[Install]\nWantedBy=timers.target\n"
+        timer = "[Unit]\nDescription=Keep BW WireGuard/AWG routes active\n[Timer]\nOnBootSec=10s\nOnUnitActiveSec=5s\nAccuracySec=1s\nPersistent=true\nUnit=bw-wg-awg-router.service\n[Install]\nWantedBy=timers.target\n"
         for content, path in (
             (ROUTER, "/tmp/bw-wg-awg-router"),
             (self._host_env(enabled, dns_via_exit), "/tmp/bw-wg-awg-router.env"),
