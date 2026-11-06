@@ -59,6 +59,7 @@ from managers.awg_plugin_updater import (
 )
 from managers.xray_manager import XrayManager
 from managers.wireguard_manager import WireGuardManager
+from managers.wireguard_exit_manager import WireGuardExitManager
 from managers.backup_manager import BackupManager
 import telegram_bot as tg_bot
 from telegram_exit_transport import TelegramExitHTTPClient
@@ -1290,6 +1291,7 @@ def _manager_call(manager, method, protocol, *args, **kwargs):
 
 
 AWG_PROTOCOLS = ('awg', 'awg2', 'awg3', 'awg_legacy')
+EXIT_LINK_PROTOCOLS = AWG_PROTOCOLS + ('wireguard',)
 
 
 # A public host is an IP (v4, or v6 in the brackets an endpoint needs to stay
@@ -1768,6 +1770,7 @@ exit_link_svc = ExitLinkService(
     data_lock=DATA_LOCK,
     get_ssh=get_ssh,
     awg_manager_factory=lambda ssh: AWGManager(ssh),
+    wireguard_manager_factory=lambda ssh: WireGuardExitManager(ssh),
     exit_manager_factory=_exit_manager_factory,
     protocol_base=protocol_base,
     awg_protocols=AWG_PROTOCOLS,
@@ -5000,9 +5003,9 @@ def api_check_server(request: Request, server_id: int):
                 for key in ('subnet', 'public_key', 'obfuscation'):
                     if db_proto.get(key) not in (None, ''):
                         merged.setdefault(key, db_proto[key])
-            if protocol_base(proto) in AWG_PROTOCOLS and db_proto.get('exit_link'):
+            if protocol_base(proto) in EXIT_LINK_PROTOCOLS and db_proto.get('exit_link'):
                 merged['exit_link'] = db_proto['exit_link']
-            if protocol_base(proto) in AWG_PROTOCOLS and db_proto.get('exit_failover'):
+            if protocol_base(proto) in EXIT_LINK_PROTOCOLS and db_proto.get('exit_failover'):
                 merged['exit_failover'] = exit_link_svc.failover_view(
                     data, db_proto, server.get('uid'))
             return merged
@@ -5034,7 +5037,8 @@ def api_check_server(request: Request, server_id: int):
                 db_proto = server.get('protocols', {}).get(proto, {}) or {}
                 if db_proto.get('exit_link') and result.get('container_running'):
                     try:
-                        result['exit_link_status'] = AWGManager(ssh).exit_link_status(proto)
+                        exit_entry_manager = WireGuardExitManager(ssh) if protocol_base(proto) == 'wireguard' else AWGManager(ssh)
+                        result['exit_link_status'] = exit_entry_manager.exit_link_status(proto)
                     except Exception as e:
                         result['exit_link_status'] = {'up': False, 'error': str(e)}
                 return proto, merge_saved_protocol_status(proto, result), None
@@ -5217,7 +5221,7 @@ async def api_install_protocol(request: Request, server_id: int, req: InstallPro
         # Reinstalling an instance is not the same as adding one: an instance a
         # user deliberately left unlinked must not be linked behind their back.
         reinstall = install_protocol in (server.get('protocols') or {})
-        if install_base in AWG_PROTOCOLS:
+        if install_base in EXIT_LINK_PROTOCOLS:
             previous_link = ((server.get('protocols') or {}).get(install_protocol) or {}).get('exit_link')
 
         awg_special_junk = awg_special_junk_from(req) if install_base in AWG_PROTOCOLS else None
@@ -5367,7 +5371,7 @@ async def api_install_protocol(request: Request, server_id: int, req: InstallPro
 
         # A new AWG instance joins the default exit node, when one is set.
         default_uid = ((data.get('settings', {}).get('exit_nodes') or {}).get('default_exit_uid') or '').strip()
-        if should_link_default_exit(default_uid, server.get('uid'), install_base in AWG_PROTOCOLS,
+        if should_link_default_exit(default_uid, server.get('uid'), install_base in EXIT_LINK_PROTOCOLS,
                                     reinstall, previous_link):
             try:
                 linked = await exit_link_svc.link(server_id, install_protocol, default_uid)
@@ -5562,7 +5566,7 @@ def _telegram_exit_available(data, exit_uid):
         if not isinstance(server_id, int) or not 0 <= server_id < len(servers):
             continue
         protocol = item.get('protocol') or ''
-        if protocol_base(protocol) not in AWG_PROTOCOLS:
+        if protocol_base(protocol) not in EXIT_LINK_PROTOCOLS:
             continue
         record = ((servers[server_id].get('protocols') or {}).get(protocol) or {})
         if record.get('installed'):
@@ -6228,7 +6232,7 @@ async def api_uninstall_protocol(request: Request, server_id: int, req: Protocol
             return guard
         server = data['servers'][server_id]
         base = protocol_base(req.protocol)
-        if base in AWG_PROTOCOLS and ((server.get('protocols') or {}).get(req.protocol) or {}).get('exit_link'):
+        if base in EXIT_LINK_PROTOCOLS and ((server.get('protocols') or {}).get(req.protocol) or {}).get('exit_link'):
             # Drop our peer on the exit while the container still exists
             try:
                 await exit_link_svc.unlink(server_id, req.protocol)

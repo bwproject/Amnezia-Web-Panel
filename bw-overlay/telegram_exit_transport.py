@@ -18,10 +18,11 @@ from urllib.parse import urlencode, urlsplit
 import httpx
 
 from managers.awg_manager import AWGManager
+from managers.wireguard_exit_manager import WireGuardExitManager
 from managers.ssh_manager import SSHManager
 
 
-_AWG_PROTOCOLS = {"awg", "awg2", "awg3", "awg_legacy"}
+_LINK_PROTOCOLS = {"awg", "awg2", "awg3", "awg_legacy", "wireguard"}
 _STATUS_MARKER = "__BW_TELEGRAM_HTTP_STATUS__:"
 
 
@@ -140,14 +141,14 @@ class TelegramExitHTTPClient:
             for protocol, record in protocols.items():
                 if not isinstance(record, dict) or not record.get("installed"):
                     continue
-                if str(protocol).split("__", 1)[0] not in _AWG_PROTOCOLS:
+                if str(protocol).split("__", 1)[0] not in _LINK_PROTOCOLS:
                     continue
                 link = record.get("exit_link") or {}
                 if link.get("exit_uid") != exit_uid or link.get("stale"):
                     continue
                 try:
                     ssh = self._dedicated_ssh(server)
-                    awg = AWGManager(ssh)
+                    awg = WireGuardExitManager(ssh) if str(protocol).split("__", 1)[0] == "wireguard" else AWGManager(ssh)
                     status = awg.exit_link_status(str(protocol))
                     if status and status.get("up"):
                         return server, str(protocol), ssh, awg

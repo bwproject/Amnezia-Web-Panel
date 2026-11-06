@@ -45,6 +45,14 @@ jobs:
             rsync -a --exclude='.keep' bw-custom/bw-overlay/ source/
           fi
 
+      - name: Validate Python syntax
+        run: |
+          python -m py_compile \
+            source/app.py \
+            source/exit_link_service.py \
+            source/telegram_exit_transport.py \
+            source/managers/wireguard_exit_manager.py
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
