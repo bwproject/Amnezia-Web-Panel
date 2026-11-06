@@ -6,8 +6,8 @@ The `BW` branch is a thin customization layer over the upstream `main` branch.
 
 The `Build Panel BW` workflow always checks out the current `main` branch into a clean build directory, then overlays the files stored in `bw-overlay/` from this `BW` branch. Docker is built from that combined source and published as:
 
-- `ghcr.io/bwproject/panel-bw:latest`
-- `ghcr.io/bwproject/panel-bw:sha-<commit>`
+- `ghcr.io/bwproject/amnezia-panel-bw:latest`
+- `ghcr.io/bwproject/amnezia-panel-bw:sha-<commit>`
 
 Do not merge upstream application files wholesale into `BW`. Put only ProjectBW-specific additions or replacement files in `bw-overlay/`. This keeps upstream fixes from `main` automatically included in each BW image build.
 
