@@ -4138,7 +4138,7 @@
         const srGroup = document.getElementById('smartRouteGroup');
         const srToggle = document.getElementById('smartRouteToggle');
         const srHint = document.getElementById('smartRouteHint');
-        srGroup.classList.toggle('hidden', !link || protoBase(currentExitLinkProto) === 'wireguard');
+        srGroup.classList.toggle('hidden', !link);
         if (link) {
             const srInstalled = !!(smartRouteStatus && smartRouteStatus.installed);
             const srGloballyOn = srInstalled && smartRouteStatus.enabled !== false;
