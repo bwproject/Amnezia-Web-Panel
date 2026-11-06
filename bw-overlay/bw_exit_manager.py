@@ -101,6 +101,11 @@ iptables -t mangle -C FORWARD -o {self.WG_INTERFACE} -p tcp --tcp-flags SYN,RST 
         )
         if result.get("status") != "success":
             return result
+        out, err, code = self.ssh.run_sudo_command(
+            f"docker exec {self.CONTAINER_NAME} wg show {self.WG_INTERFACE}"
+        )
+        if code != 0:
+            raise RuntimeError(f"Standard WireGuard transit did not start: {err or out}")
         wg_info = self.get_wireguard_info(result.get("port") or port)
         result["wireguard"] = wg_info
         result["log"] = list(result.get("log") or []) + [
@@ -208,6 +213,44 @@ iptables -t mangle -C FORWARD -o {self.WG_INTERFACE} -p tcp --tcp-flags SYN,RST 
         info = self.get_wireguard_info(base_port)
         info.update({"transit_ip": transit_ip, "psk": psk})
         return info
+
+    def list_peers(self):
+        peers = super().list_peers()
+        try:
+            config = self._read_wg_config()
+            _, blocks = self._peer_blocks(config)
+            live_out, _, live_code = self.ssh.run_sudo_command(
+                f"docker exec {self.CONTAINER_NAME} wg show {self.WG_INTERFACE} dump"
+            )
+            live = {}
+            if live_code == 0:
+                for row in live_out.splitlines()[1:]:
+                    cols = row.split("\\t")
+                    if len(cols) >= 8:
+                        live[cols[0]] = {"latestHandshake": cols[4], "dataReceived": cols[5],
+                                         "dataSent": cols[6], "allowedIps": cols[3]}
+            for block in blocks:
+                key = self._peer_key(block)
+                ip = self._peer_ip(block)
+                stats = live.get(key, {})
+                peers.append({
+                    "peer_id": self._peer_id(block),
+                    "name": re.search(r"^# clientName = (.+)$", block, re.M).group(1)
+                            if re.search(r"^# clientName = (.+)$", block, re.M) else "WireGuard transit",
+                    "transit_ip": ip,
+                    "public_key": key,
+                    "created_at": "",
+                    "latest_handshake": stats.get("latestHandshake", ""),
+                    "rx": stats.get("dataReceived", ""),
+                    "tx": stats.get("dataSent", ""),
+                    "rx_bytes": int(stats.get("dataReceived", 0) or 0),
+                    "tx_bytes": int(stats.get("dataSent", 0) or 0),
+                    "external": False,
+                    "transport": "wireguard",
+                })
+        except Exception:
+            pass
+        return peers
 
     def remove_wireguard_peer(self, public_key=None, peer_id=None):
         config = self._read_wg_config()
