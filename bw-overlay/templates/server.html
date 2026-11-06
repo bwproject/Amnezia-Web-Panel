@@ -4203,14 +4203,14 @@
                 const opt = document.createElement('option');
                 opt.value = n.uid;
                 opt.textContent = `${n.name} (${n.host}:${n.port || '?'})${n.obfuscation ? ' [AWG]' : ''}`;
-                if ((legacy || plainWireGuard) && n.obfuscation) {
+                if (legacy && n.obfuscation) {
                     opt.disabled = true;
-                    opt.title = plainWireGuard ? 'Standard WireGuard cannot connect to an obfuscated Exit Node' : _('exit_legacy_obfuscation');
+                    opt.title = _('exit_legacy_obfuscation');
                 }
                 if (state.exit_link && state.exit_link.exit_uid === n.uid) opt.selected = true;
                 select.appendChild(opt);
             });
-            document.getElementById('exitLinkBtn').disabled = !candidates.some(n => !(legacy || plainWireGuard) || !n.obfuscation);
+            document.getElementById('exitLinkBtn').disabled = !candidates.some(n => !legacy || !n.obfuscation);
             renderExitLinkState(state);
         } catch (err) {
             document.getElementById('exitLinkState').innerHTML = `<div class="form-hint">${_('error')}: ${escapeHtml(err.message)}</div>`;
