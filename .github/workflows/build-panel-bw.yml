@@ -1,0 +1,76 @@
+name: Build Panel BW
+
+on:
+  push:
+    branches:
+      - BW
+    paths:
+      - '.github/workflows/build-panel-bw.yml'
+      - 'bw-overlay/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/bwproject/panel-bw
+
+jobs:
+  build:
+    name: Build and publish panel-bw
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout upstream main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: source
+          fetch-depth: 1
+
+      - name: Checkout BW overlay
+        uses: actions/checkout@v4
+        with:
+          ref: BW
+          path: bw-custom
+          sparse-checkout: |
+            bw-overlay
+          fetch-depth: 1
+
+      - name: Apply BW overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -d "bw-custom/bw-overlay" ]; then
+            rsync -a --exclude='.keep' bw-custom/bw-overlay/ source/
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+
+      - name: Build and push panel-bw
+        uses: docker/build-push-action@v6
+        with:
+          context: source
+          file: source/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
