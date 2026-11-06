@@ -225,7 +225,7 @@ iptables -t mangle -C FORWARD -o {self.WG_INTERFACE} -p tcp --tcp-flags SYN,RST 
             live = {}
             if live_code == 0:
                 for row in live_out.splitlines()[1:]:
-                    cols = row.split("\\t")
+                    cols = row.split("\t")
                     if len(cols) >= 8:
                         live[cols[0]] = {"latestHandshake": cols[4], "dataReceived": cols[5],
                                          "dataSent": cols[6], "allowedIps": cols[3]}
