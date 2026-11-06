@@ -444,7 +444,7 @@ class SmartRouteService:
             try:
                 awg = await self._awg(server, proto)
                 if self.protocol_base(proto) == 'wireguard':
-                    await asyncio.to_thread(awg.exit_set_smart_route, True)
+                    await asyncio.to_thread(awg.exit_set_smart_route, bool((server.get('smartroute') or {}).get('enabled', True)))
                 else:
                     container, _, _ = await self._container_ctx(awg, proto)
                     await asyncio.to_thread(smartr.refresh_instance, container)
