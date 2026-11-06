@@ -59,6 +59,16 @@ if [ "${DNS_VIA_EXIT:-0}" != 1 ]; then
 else
   docker exec "$WG_CONTAINER" sh -c "ip route del throw 172.29.172.0/24 table 201 2>/dev/null || true" >/dev/null 2>&1 || true
 fi
+# Smart Route: RU and administrator-owned prefixes bypass the AWG Exit Node.
+if [ "${SMARTROUTE_ENABLED:-0}" = 1 ] && [ -d /etc/smartroute ]; then
+  cat /etc/smartroute/ru_v4.cidr /etc/smartroute/own.cidr 2>/dev/null | grep -E '^[0-9]+(\\.[0-9]+){3}/[0-9]+$' | sort -u > /tmp/bw-wg-smartroute.cidr
+  if [ -s /tmp/bw-wg-smartroute.cidr ] && docker cp /tmp/bw-wg-smartroute.cidr "$WG_CONTAINER:/tmp/bw-wg-smartroute.cidr" >/dev/null 2>&1; then
+    docker exec "$WG_CONTAINER" sh -c 'ip -4 route show table 201 | while read kind dst rest; do [ "$kind" = throw ] && ip -4 route del throw "$dst" table 201 2>/dev/null || true; done; while read cidr; do [ -n "$cidr" ] && ip -4 route replace throw "$cidr" table 201; done < /tmp/bw-wg-smartroute.cidr'
+  fi
+  rm -f /tmp/bw-wg-smartroute.cidr
+else
+  docker exec "$WG_CONTAINER" sh -c 'ip -4 route show table 201 | while read kind dst rest; do [ "$kind" = throw ] && ip -4 route del throw "$dst" table 201 2>/dev/null || true; done' >/dev/null 2>&1 || true
+fi
 docker exec "$AWG_CONTAINER" sh -c "sysctl -w net.ipv4.ip_forward=1 >/dev/null; sysctl -w net.ipv4.conf.bwexit0.rp_filter=2 >/dev/null 2>&1 || true; ip route replace '$WG_SUBNET' via '$WG_IP' dev '$AWG_DEV'; ip route replace default dev bwexit0 table 201; iptables -C FORWARD -i '$AWG_DEV' -o bwexit0 -s '$WG_SUBNET' -j ACCEPT 2>/dev/null || iptables -A FORWARD -i '$AWG_DEV' -o bwexit0 -s '$WG_SUBNET' -j ACCEPT; iptables -C FORWARD -i bwexit0 -o '$AWG_DEV' -d '$WG_SUBNET' -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -i bwexit0 -o '$AWG_DEV' -d '$WG_SUBNET' -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT; iptables -t nat -C POSTROUTING -s '$WG_SUBNET' -o bwexit0 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s '$WG_SUBNET' -o bwexit0 -j MASQUERADE; iptables -t mangle -C FORWARD -i '$AWG_DEV' -o bwexit0 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || iptables -t mangle -A FORWARD -i '$AWG_DEV' -o bwexit0 -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu; iptables -t mangle -C FORWARD -i bwexit0 -o '$AWG_DEV' -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || iptables -t mangle -A FORWARD -i bwexit0 -o '$AWG_DEV' -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu" || exit 1
 """
 
@@ -112,7 +122,7 @@ class BWAWGWireGuardTransport:
                 return str(interface.network), str(interface.ip)
         raise RuntimeError("Could not read the standard WireGuard client subnet")
 
-    def _host_env(self, enabled, dns_via_exit=False):
+    def _host_env(self, enabled, dns_via_exit=False, smart_route=False):
         subnet, _ = self._wg_network()
         values = {
             "ENABLED": "1" if enabled else "0",
@@ -122,10 +132,11 @@ class BWAWGWireGuardTransport:
             "WG_SUBNET": subnet,
             "AWG_CONF": AWG_CONF,
             "DNS_VIA_EXIT": "1" if dns_via_exit else "0",
+            "SMARTROUTE_ENABLED": "1" if smart_route else "0",
         }
         return "".join(f"{k}={shlex.quote(v)}\n" for k, v in values.items())
 
-    def _install_router(self, enabled=True, dns_via_exit=False):
+    def _install_router(self, enabled=True, dns_via_exit=False, smart_route=False):
         _, _, code = self.ssh.run_sudo_command("command -v systemctl >/dev/null 2>&1")
         if code:
             raise RuntimeError("Automatic WireGuard/AWG routing requires systemd on the entry server")
@@ -133,7 +144,7 @@ class BWAWGWireGuardTransport:
         timer = "[Unit]\nDescription=Keep BW WireGuard/AWG routes active\n[Timer]\nOnBootSec=10s\nOnUnitActiveSec=5s\nAccuracySec=1s\nPersistent=true\nUnit=bw-wg-awg-router.service\n[Install]\nWantedBy=timers.target\n"
         for content, path in (
             (ROUTER, "/tmp/bw-wg-awg-router"),
-            (self._host_env(enabled, dns_via_exit), "/tmp/bw-wg-awg-router.env"),
+            (self._host_env(enabled, dns_via_exit, smart_route), "/tmp/bw-wg-awg-router.env"),
             (service, "/tmp/bw-wg-awg-router.service"),
             (timer, "/tmp/bw-wg-awg-router.timer"),
         ):
@@ -168,6 +179,7 @@ class BWAWGWireGuardTransport:
             f"# ExitUid = {link.get('exit_uid', '')}",
             f"# ExitName = {link.get('exit_name', '')}",
             f"# DnsViaExit = {'on' if link.get('dns_via_exit') else 'off'}",
+            f"# SmartRoute = {'on' if link.get('smart_route') else 'off'}",
             "PrivateKey = __BW_PRIVATE_KEY__",
             f"Address = {link['transit_ip']}/{link.get('subnet_cidr', 24)}",
             f"MTU = {min(int(link.get('mtu') or EXIT_MTU), EXIT_MTU)}",
@@ -199,12 +211,12 @@ class BWAWGWireGuardTransport:
         finally:
             self.ssh.run_command("rm -f /tmp/bw-wg-awg-exit.conf")
 
-    def _apply(self, dns_via_exit=False):
+    def _apply(self, dns_via_exit=False, smart_route=False):
         self._run(
             f"docker exec -i {self.container} sh -c '{self.quick_bin} down {AWG_CONF} >/dev/null 2>&1 || true; "
             f"{self.quick_bin} up {AWG_CONF}'", timeout=60
         )
-        self._install_router(True, dns_via_exit)
+        self._install_router(True, dns_via_exit, smart_route)
         return "AWG transport up; standard WireGuard client traffic is routed through the existing AWG container"
 
     def _cleanup_legacy_wg_exit(self):
@@ -229,14 +241,14 @@ class BWAWGWireGuardTransport:
 
     def exit_link(self, protocol_type, link):
         self._write_config(link)
-        return self._apply(bool(link.get("dns_via_exit")))
+        return self._apply(bool(link.get("dns_via_exit")), bool(link.get("smart_route")) )
 
     def exit_cleanup_legacy(self):
         # Called only after the replacement AWG peer has completed handshake.
         return self._cleanup_legacy_wg_exit()
 
     def exit_unlink(self, protocol_type):
-        self._install_router(False, False)
+        self._install_router(False, False, False)
         self._run(
             f"docker exec -i {self.container} sh -c '{self.quick_bin} down {AWG_CONF} >/dev/null 2>&1 || true; rm -f {AWG_CONF}'"
         )
@@ -250,7 +262,36 @@ class BWAWGWireGuardTransport:
     def exit_restore_conf(self, protocol_type):
         self._run(f"docker exec -i {self.container} sh -c 'test -f {AWG_BACKUP} && cp -p {AWG_BACKUP} {AWG_CONF}'")
         out = self._run(f"docker exec -i {self.container} cat {AWG_CONF}")
-        return self._apply("# DnsViaExit = on" in out)
+        return self._apply("# DnsViaExit = on" in out, "# SmartRoute = on" in out)
+
+    def exit_set_smart_route(self, protocol_type, enabled):
+        """Toggle RU-prefix bypass in the standard WireGuard policy table."""
+        out = self._run(f"docker exec -i {self.container} cat {AWG_CONF}")
+        dns_via_exit = "# DnsViaExit = on" in out
+        marker = "# SmartRoute = on" if enabled else "# SmartRoute = off"
+        if re.search(r"^# SmartRoute = .*?$", out, flags=re.M):
+            out = re.sub(r"^# SmartRoute = .*?$", marker, out, flags=re.M)
+        else:
+            out = out.replace("# DnsViaExit =", marker + "\\n# DnsViaExit =", 1)
+        self.ssh.upload_file(out, "/tmp/bw-wg-awg-exit.conf")
+        try:
+            self._run(f"docker cp /tmp/bw-wg-awg-exit.conf {self.container}:{AWG_CONF} && docker exec {self.container} chmod 600 {AWG_CONF}")
+        finally:
+            self.ssh.run_command("rm -f /tmp/bw-wg-awg-exit.conf")
+        self._install_router(True, dns_via_exit, bool(enabled))
+        return "Smart Route " + ("enabled" if enabled else "disabled") + " for standard WireGuard"
+
+    def exit_smartroute_counters(self, protocol_type):
+        out, _, code = self.ssh.run_sudo_command(
+            f"docker exec {WG_CONTAINER} sh -c 'ip -4 route show table 201 | grep -c \"^throw\" || true'")
+        count = int((out or "0").strip() or 0) if code == 0 else 0
+        zero = {"pkts": 0, "bytes": 0}
+        return {
+            "direct": dict(zero), "via_exit": dict(zero),
+            "direct_out": dict(zero), "direct_in": dict(zero),
+            "via_exit_out": dict(zero), "via_exit_in": dict(zero),
+            "throw_routes": count,
+        }
 
     def exit_set_dns_via_exit(self, protocol_type, enabled):
         value = "on" if enabled else "off"
@@ -258,7 +299,8 @@ class BWAWGWireGuardTransport:
             f"docker exec -i {self.container} sh -c 'test -f {AWG_CONF} && "
             f"sed -i \"s|^# DnsViaExit = .*|# DnsViaExit = {value}|\" {AWG_CONF}'"
         )
-        self._install_router(True, bool(enabled))
+        current = self._run(f"docker exec -i {self.container} sh -c 'grep -q \"^# SmartRoute = on\" {AWG_CONF}' 2>/dev/null || true")
+        self._install_router(True, bool(enabled), bool(current.strip()))
         return "DNS traffic is routed " + ("through the Exit Node" if enabled else "through the entry server")
 
     def exit_link_info(self, protocol_type):
