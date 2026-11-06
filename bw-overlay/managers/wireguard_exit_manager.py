@@ -45,6 +45,12 @@ class WireGuardExitManager(WireGuardManager):
     def exit_set_dns_via_exit(self, protocol_type, enabled):
         return self.awg_transport.exit_set_dns_via_exit(protocol_type, enabled)
 
+    def exit_set_smart_route(self, enabled):
+        return self.awg_transport.exit_set_smart_route('wireguard', enabled)
+
+    def exit_smartroute_counters(self):
+        return self.awg_transport.exit_smartroute_counters('wireguard')
+
     def exit_link_info(self, protocol_type):
         return self.awg_transport.exit_link_info(protocol_type)
 
