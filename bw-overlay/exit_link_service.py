@@ -148,14 +148,12 @@ class ExitLinkService:
 
     @staticmethod
     def _add_exit_peer(exit_manager, protocol, peer_id, name, public_key):
-        if str(protocol).split('__', 1)[0] == 'wireguard':
-            return exit_manager.add_wireguard_peer(peer_id, name, public_key)
+        # Exit Nodes expose one AWG transit. Standard WG entries reach it
+        # through their own server's existing AmneziaWG container.
         return exit_manager.add_peer(peer_id, name, public_key)
 
     @staticmethod
     def _remove_exit_peer(exit_manager, protocol, peer_id=None, public_key=None):
-        if str(protocol).split('__', 1)[0] == 'wireguard':
-            return exit_manager.remove_wireguard_peer(public_key=public_key, peer_id=peer_id)
         return exit_manager.remove_peer(public_key=public_key, peer_id=peer_id)
 
     # ----- persistence under the lock, resolved by uid (indices may shift) -----
