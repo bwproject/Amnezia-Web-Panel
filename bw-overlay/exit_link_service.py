@@ -358,6 +358,7 @@ class ExitLinkService:
                 'obfuscation': bool(peer.get('obfuscation')),
                 'awg_params': peer.get('awg_params') or {},
                 'dns_via_exit': dns_via_exit,
+                'smart_route': bool(previous.get('smart_route')),
             }
             try:
                 log.append(await asyncio.to_thread(awg.exit_link, protocol, link))
