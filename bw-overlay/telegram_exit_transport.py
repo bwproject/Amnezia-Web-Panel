@@ -12,9 +12,13 @@ import ipaddress
 import json
 import secrets
 import shlex
+import threading
 from urllib.parse import urlencode, urlsplit
 
 import httpx
+
+from managers.awg_manager import AWGManager
+from managers.ssh_manager import SSHManager
 
 
 _AWG_PROTOCOLS = {"awg", "awg2", "awg3", "awg_legacy"}
@@ -28,11 +32,14 @@ def _safe_multipart_header(value):
 class TelegramExitHTTPClient:
     """httpx-compatible client that uses the selected Exit Node or direct HTTP."""
 
-    def __init__(self, load_data_fn, get_ssh_fn, awg_manager_factory):
+    def __init__(self, load_data_fn):
         self._load_data = load_data_fn
-        self._get_ssh = get_ssh_fn
-        self._awg_manager_factory = awg_manager_factory
         self._direct = httpx.AsyncClient()
+        # A dedicated SSH connection keeps Telegram long-polling from holding
+        # the panel's shared per-server SSH command lock for up to 35 seconds.
+        self._ssh_lock = threading.RLock()
+        self._ssh_key = None
+        self._ssh_session = None
 
     async def __aenter__(self):
         await self._direct.__aenter__()
@@ -40,6 +47,14 @@ class TelegramExitHTTPClient:
 
     async def __aexit__(self, exc_type, exc, tb):
         await self._direct.__aexit__(exc_type, exc, tb)
+        with self._ssh_lock:
+            if self._ssh_session is not None:
+                try:
+                    self._ssh_session.disconnect()
+                except Exception:
+                    pass
+                self._ssh_session = None
+                self._ssh_key = None
 
     async def post(self, url, json=None, timeout=30, **kwargs):
         parsed = urlsplit(str(url))
@@ -135,12 +150,40 @@ class TelegramExitHTTPClient:
             "Selected Telegram Exit Node has no active linked AmneziaWG instance"
         )
 
+    def _dedicated_ssh(self, server):
+        key = (
+            server.get("uid"), server.get("host"), int(server.get("ssh_port", 22)),
+            server.get("username"), server.get("password"), server.get("private_key"),
+        )
+        with self._ssh_lock:
+            if self._ssh_key != key:
+                if self._ssh_session is not None:
+                    try:
+                        self._ssh_session.disconnect()
+                    except Exception:
+                        pass
+                self._ssh_session = None
+                self._ssh_key = key
+            if self._ssh_session is None:
+                self._ssh_session = SSHManager(
+                    host=server["host"],
+                    port=server.get("ssh_port", 22),
+                    username=server["username"],
+                    password=server.get("password"),
+                    private_key=server.get("private_key"),
+                    connect_cooldown_base=float(server.get("ssh_cooldown_base") or 30),
+                )
+                self._ssh_session.connect()
+            else:
+                self._ssh_session.ensure_connected()
+            return self._ssh_session
+
     def _post_via_exit(self, url, body, content_type, timeout_seconds, exit_uid):
         data = self._load_data()
         server, protocol = self._find_entry(data, exit_uid)
         try:
-            ssh = self._get_ssh(server)
-            awg = self._awg_manager_factory(ssh)
+            ssh = self._dedicated_ssh(server)
+            awg = AWGManager(ssh)
             container_name = awg._container_name(protocol)
             source_ip = awg._get_subnet_ip(protocol)
             ipaddress.ip_address(source_ip)

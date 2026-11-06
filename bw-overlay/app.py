@@ -2941,7 +2941,7 @@ async def startup():
     tg_cfg = data.get('settings', {}).get('telegram', {})
     if tg_cfg.get('enabled') and tg_cfg.get('token'):
         logger.info("Starting Telegram bot from saved settings...")
-        tg_bot.launch_bot(tg_cfg['token'], load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, http_client_factory=lambda: TelegramExitHTTPClient(load_data, get_ssh, lambda ssh: AWGManager(ssh)))
+        tg_bot.launch_bot(tg_cfg['token'], load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, http_client_factory=lambda: TelegramExitHTTPClient(load_data))
 
 
 def _auto_backup_due(auto_backup: dict, now: Optional[datetime] = None) -> bool:
@@ -8831,7 +8831,7 @@ def save_settings(request: Request, payload: SaveSettingsRequest):
     if tg_cfg.enabled and tg_cfg.token:
         if not tg_bot.is_running():
             logger.info("Starting Telegram bot (settings save)...")
-            tg_bot.launch_bot(tg_cfg.token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, http_client_factory=lambda: TelegramExitHTTPClient(load_data, get_ssh, lambda ssh: AWGManager(ssh)))
+            tg_bot.launch_bot(tg_cfg.token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, http_client_factory=lambda: TelegramExitHTTPClient(load_data))
     else:
         if tg_bot.is_running():
             logger.info("Stopping Telegram bot (settings save)...")
@@ -9015,7 +9015,7 @@ async def api_telegram_toggle(request: Request):
         save_data(data)
         return {'status': 'stopped', 'bot_running': False}
     else:
-        tg_bot.launch_bot(token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, http_client_factory=lambda: TelegramExitHTTPClient(load_data, get_ssh, lambda ssh: AWGManager(ssh)))
+        tg_bot.launch_bot(token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, http_client_factory=lambda: TelegramExitHTTPClient(load_data))
         tg_cfg['enabled'] = True
         data['settings']['telegram'] = tg_cfg
         save_data(data)
