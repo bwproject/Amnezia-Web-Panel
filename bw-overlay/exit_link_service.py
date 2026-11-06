@@ -146,6 +146,18 @@ class ExitLinkService:
     async def _exit_manager(self, server):
         return self.exit_manager_factory(await asyncio.to_thread(self.get_ssh, server))
 
+    @staticmethod
+    def _add_exit_peer(exit_manager, protocol, peer_id, name, public_key):
+        if str(protocol).split('__', 1)[0] == 'wireguard':
+            return exit_manager.add_wireguard_peer(peer_id, name, public_key)
+        return exit_manager.add_peer(peer_id, name, public_key)
+
+    @staticmethod
+    def _remove_exit_peer(exit_manager, protocol, peer_id=None, public_key=None):
+        if str(protocol).split('__', 1)[0] == 'wireguard':
+            return exit_manager.remove_wireguard_peer(public_key=public_key, peer_id=peer_id)
+        return exit_manager.remove_peer(public_key=public_key, peer_id=peer_id)
+
     # ----- persistence under the lock, resolved by uid (indices may shift) -----
 
     async def _update_record(self, entry_uid, protocol, mutate):
@@ -185,7 +197,7 @@ class ExitLinkService:
 
     async def _rollback(self, awg, protocol, exit_manager, peer_id):
         for what, call in (('entry unlink', lambda: awg.exit_unlink(protocol)),
-                           ('exit remove_peer', lambda: exit_manager.remove_peer(peer_id=peer_id))):
+                           ('exit remove_peer', lambda: self._remove_exit_peer(exit_manager, protocol, peer_id=peer_id))):
             try:
                 await asyncio.to_thread(call)
             except Exception as err:  # the original error is what the user must see
@@ -255,10 +267,7 @@ class ExitLinkService:
             exit_srv, exit_rec = self._exit(data, exit_uid)
             if exit_srv.get('uid') == entry['uid']:
                 raise ExitLinkError('exit_self', 'A server cannot be its own exit node')
-            if self.protocol_base(protocol) in ('awg_legacy', 'wireguard') and exit_rec.get('obfuscation'):
-                if self.protocol_base(protocol) == 'wireguard':
-                    raise ExitLinkError('exit_wireguard_obfuscation',
-                                        'Standard WireGuard can only link to a non-obfuscated Exit Node')
+            if self.protocol_base(protocol) == 'awg_legacy' and exit_rec.get('obfuscation'):
                 raise ExitLinkError('exit_legacy_obfuscation',
                                     'AmneziaWG Legacy can only link to a non-obfuscated exit node')
             previous = rec.get('exit_link') or {}
@@ -318,7 +327,7 @@ class ExitLinkService:
                     except Exception as err:
                         logger.warning("exit failover restore failed, falling back to unlink: %s", err)
                     try:
-                        await asyncio.to_thread(exit_manager.remove_peer, None, peer_id)
+                        await asyncio.to_thread(self._remove_exit_peer, exit_manager, protocol, peer_id=peer_id)
                     except Exception as err:
                         logger.warning("exit link rollback: exit remove_peer failed: %s", err)
                     if restored:
@@ -333,7 +342,7 @@ class ExitLinkService:
             record = (entry.get('protocols') or {}).get(protocol, {})
             label = self.protocol_display_name(protocol, record.get('header_protection'), record.get('protocol_version'))
             name = f"{entry.get('name') or entry.get('host', '')} / {label}"
-            peer = await asyncio.to_thread(exit_manager.add_peer, peer_id, name, entry_pub)
+            peer = await asyncio.to_thread(self._add_exit_peer, exit_manager, protocol, peer_id, name, entry_pub)
             link = {
                 'exit_uid': exit_uid,
                 'exit_name': exit_srv.get('name') or exit_srv.get('host', ''),
@@ -368,7 +377,7 @@ class ExitLinkService:
                 try:
                     old_exit, _ = self._exit(data, previous['exit_uid'])
                     old_exit_manager = await self._exit_manager(old_exit)
-                    await asyncio.to_thread(old_exit_manager.remove_peer, None, peer_id)
+                    await asyncio.to_thread(self._remove_exit_peer, old_exit_manager, protocol, peer_id=peer_id)
                 except Exception as err:
                     logger.warning("previous exit %s unreachable, peer left behind: %s", previous['exit_uid'], err)
                     warnings.append('old_exit_unreachable_orphan_peer')
@@ -422,8 +431,8 @@ class ExitLinkService:
             try:
                 exit_srv, _ = self._exit(data, link.get('exit_uid'))
                 exit_manager = await self._exit_manager(exit_srv)
-                await asyncio.to_thread(exit_manager.remove_peer, None,
-                                        peer_id_for(entry_uid, protocol))
+                await asyncio.to_thread(self._remove_exit_peer, exit_manager, protocol,
+                                        peer_id=peer_id_for(entry_uid, protocol))
             except Exception as err:
                 logger.warning("exit %s unreachable on unlink, peer left behind: %s", link.get('exit_uid'), err)
                 warnings.append('exit_unreachable_orphan_peer')
@@ -554,8 +563,8 @@ class ExitLinkService:
                 try:
                     exit_srv, _ = self._exit(data, link['exit_uid'])
                     exit_manager = await self._exit_manager(exit_srv)
-                    await asyncio.to_thread(exit_manager.remove_peer, None,
-                                            peer_id_for(entry_uid, proto))
+                    await asyncio.to_thread(self._remove_exit_peer, exit_manager, proto,
+                                            peer_id=peer_id_for(entry_uid, proto))
                     results.append({'protocol': proto, 'exit_uid': link['exit_uid'], 'status': 'success'})
                 except Exception as err:
                     logger.warning("could not drop peer for %s on exit %s: %s", proto, link['exit_uid'], err)
