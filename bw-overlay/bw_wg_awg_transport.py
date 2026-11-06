@@ -4,7 +4,7 @@ import re
 import shlex
 import time
 
-from managers.awg_manager import AWGManager, TRANSIT_PARAM_KEYS, EXIT_MTU, EXIT_HANDSHAKE_UP_SECONDS
+from managers.awg_manager import (\n    AWGManager, TRANSIT_PARAM_KEYS, EXIT_MTU, EXIT_HANDSHAKE_UP_SECONDS,\n    EXIT_CONF, EXIT_CONF_BACKUP, EXIT_IFACE, EXIT_TABLE,\n)
 
 HOST_SCRIPT = "/usr/local/sbin/bw-wg-awg-router"
 HOST_ENV = "/etc/default/bw-wg-awg-router"
@@ -197,15 +197,40 @@ class BWAWGWireGuardTransport:
         self._install_router(True, dns_via_exit)
         return "AWG transport up; standard WireGuard client traffic is routed through the existing AWG container"
 
+    def _cleanup_legacy_wg_exit(self):
+        """Remove the previous BW plain-WireGuard exit0 route after migration."""
+        subnet, _ = self._wg_network()
+        command = (
+            f"docker exec -i {WG_CONTAINER} sh -c '"
+            f"wg-quick down {EXIT_CONF} >/dev/null 2>&1 || true; "
+            f"ip link del {EXIT_IFACE} 2>/dev/null || true; "
+            f"for p in 190 191 {EXIT_TABLE}; do "
+            f"while ip -4 rule del pref $p 2>/dev/null; do :; done; "
+            f"while ip -6 rule del pref $p 2>/dev/null; do :; done; done; "
+            f"ip -4 route flush table {EXIT_TABLE} 2>/dev/null || true; "
+            f"ip -6 route flush table {EXIT_TABLE} 2>/dev/null || true; "
+            f"while iptables -D FORWARD -i wg0 -o {EXIT_IFACE} -s {subnet} -j ACCEPT 2>/dev/null; do :; done; "
+            f"while iptables -t nat -D POSTROUTING -s {subnet} -o {EXIT_IFACE} -j MASQUERADE 2>/dev/null; do :; done; "
+            f"while iptables -t mangle -D FORWARD -o {EXIT_IFACE} -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null; do :; done; "
+            f"while iptables -t mangle -D FORWARD -i {EXIT_IFACE} -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null; do :; done; "
+            f"rm -f {EXIT_CONF} {EXIT_CONF_BACKUP}'"
+        )
+        self._run(command)
+
     def exit_link(self, protocol_type, link):
         self._write_config(link)
-        return self._apply(bool(link.get("dns_via_exit")))
+        result = self._apply(bool(link.get("dns_via_exit")))
+        # The new AWG route is active now, so it is safe to retire an older
+        # WG-container exit0 link left by a previous BW build.
+        self._cleanup_legacy_wg_exit()
+        return result
 
     def exit_unlink(self, protocol_type):
         self._install_router(False, False)
         self._run(
             f"docker exec -i {self.container} sh -c '{self.quick_bin} down {AWG_CONF} >/dev/null 2>&1 || true; rm -f {AWG_CONF}'"
         )
+        self._cleanup_legacy_wg_exit()
         return "Standard WireGuard Exit Link removed"
 
     def exit_backup_conf(self, protocol_type):
