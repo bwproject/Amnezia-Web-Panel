@@ -14,11 +14,11 @@ permissions:
   packages: write
 
 env:
-  IMAGE_NAME: ghcr.io/bwproject/panel-bw
+  IMAGE_NAME: ghcr.io/bwproject/amnezia-panel-bw
 
 jobs:
   build:
-    name: Build and publish panel-bw
+    name: Build and publish amnezia-panel-bw
     runs-on: ubuntu-latest
     steps:
       - name: Checkout upstream main
@@ -64,7 +64,7 @@ jobs:
             type=raw,value=latest
             type=sha,format=short
 
-      - name: Build and push panel-bw
+      - name: Build and push amnezia-panel-bw
         uses: docker/build-push-action@v6
         with:
           context: source
