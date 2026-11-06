@@ -5,7 +5,6 @@ Standard WireGuard entries use transitwg0 on UDP port transit_port + 1.
 """
 import ipaddress
 import re
-from datetime import datetime
 
 from managers.exit_manager import ExitManager
 from managers.awg_manager import generate_psk
@@ -126,11 +125,14 @@ iptables -t mangle -C FORWARD -o {self.WG_INTERFACE} -p tcp --tcp-flags SYN,RST 
         self.ssh.run_command("rm -f /tmp/_bw_transitwg0.conf")
         if code != 0:
             raise RuntimeError(f"Could not update standard WireGuard transit config: {err or out}")
-        self.ssh.run_sudo_command(
-            f"docker exec {self.CONTAINER_NAME} wg syncconf {self.WG_INTERFACE} "
-            f"<(wg-quick strip {self.WG_CONFIG_PATH})",
+        out, err, code = self.ssh.run_sudo_command(
+            f"docker exec {self.CONTAINER_NAME} sh -c "
+            f"'wg-quick down {self.WG_CONFIG_PATH} >/dev/null 2>&1 || true; "
+            f"wg-quick up {self.WG_CONFIG_PATH}'",
             timeout=30,
         )
+        if code != 0:
+            raise RuntimeError(f"Could not reload standard WireGuard transit: {err or out}")
 
     @staticmethod
     def _peer_blocks(config):
@@ -170,7 +172,7 @@ iptables -t mangle -C FORWARD -o {self.WG_INTERFACE} -p tcp --tcp-flags SYN,RST 
         if code != 0:
             raise RuntimeError(f"Could not read standard WireGuard transit public key: {err or out}")
         if base_port is None:
-            base_port = self._read_config_key(self.PROTOCOL, "port") or "55520"
+            base_port = self._get_awg_params_from_config(self.PROTOCOL).get("port") or "55520"
         return {
             "public_key": out.strip(),
             "port": self._wg_port(base_port),
@@ -202,7 +204,8 @@ iptables -t mangle -C FORWARD -o {self.WG_INTERFACE} -p tcp --tcp-flags SYN,RST 
         )
         blocks.sort(key=lambda block: ipaddress.ip_address(self._peer_ip(block) or "255.255.255.255"))
         self._write_wg_config(head.rstrip() + "\n\n" + "\n\n".join(blocks) + "\n")
-        info = self.get_wireguard_info(self._read_config_key(self.PROTOCOL, "port"))
+        base_port = self._get_awg_params_from_config(self.PROTOCOL).get("port") or "55520"
+        info = self.get_wireguard_info(base_port)
         info.update({"transit_ip": transit_ip, "psk": psk})
         return info
 
