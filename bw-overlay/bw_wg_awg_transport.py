@@ -71,17 +71,22 @@ class BWAWGWireGuardTransport:
         return out
 
     def _select_container(self):
-        out, err, code = self.ssh.run_sudo_command("docker ps --format '{{.Names}}'")
+        out, err, code = self.ssh.run_sudo_command("docker ps -a --format '{{.Names}}'")
         if code:
             raise RuntimeError("Could not inspect Docker containers on the entry server")
+        installed = set(out.splitlines())
+        out, _, _ = self.ssh.run_sudo_command("docker ps --format '{{.Names}}'")
         running = set(out.splitlines())
         for proto in ("awg", "awg__2", "awg__3", "awg2", "awg3", "awg_legacy"):
             name = self.awg._container_name(proto)
-            if name in running:
-                self.protocol, self.container = proto, name
-                self.wg_bin = self.awg._wg_binary(proto)
-                self.quick_bin = self.awg._quick_binary(proto)
-                return
+            if name not in installed:
+                continue
+            if name not in running:
+                self._run(f"docker start {shlex.quote(name)}")
+            self.protocol, self.container = proto, name
+            self.wg_bin = self.awg._wg_binary(proto)
+            self.quick_bin = self.awg._quick_binary(proto)
+            return
         raise RuntimeError(
             "To link standard WireGuard, this entry server must already have a running "
             "AmneziaWG container. Install/start AWG first; BW will not create a second VPN."
