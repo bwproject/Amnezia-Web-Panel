@@ -283,7 +283,7 @@ class BWAWGWireGuardTransport:
 
     def exit_smartroute_counters(self, protocol_type):
         out, _, code = self.ssh.run_sudo_command(
-            f"docker exec {WG_CONTAINER} sh -c 'ip -4 route show table 201 | grep -c \"^throw\" || true'")
+            f"docker exec {WG_CONTAINER} sh -c 'ip -4 route show table 201 | grep -c \"proto 186\" || true'")
         count = int((out or "0").strip() or 0) if code == 0 else 0
         zero = {"pkts": 0, "bytes": 0}
         return {
