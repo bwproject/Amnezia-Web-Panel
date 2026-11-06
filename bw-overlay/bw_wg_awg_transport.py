@@ -145,10 +145,11 @@ class BWAWGWireGuardTransport:
             "install -m 0644 /tmp/bw-wg-awg-router.timer /etc/systemd/system/bw-wg-awg-router.timer && "
             "systemctl daemon-reload && "
             + ("systemctl enable --now bw-wg-awg-router.timer && systemctl start bw-wg-awg-router.service"
-               if enabled else "systemctl start bw-wg-awg-router.service && systemctl disable --now bw-wg-awg-router.timer >/dev/null 2>&1 || true")
+               if enabled else "systemctl start bw-wg-awg-router.service && { systemctl disable --now bw-wg-awg-router.timer >/dev/null 2>&1 || true; }")
         )
         self._run(command, timeout=60)
         self.ssh.run_command("rm -f /tmp/bw-wg-awg-router*")
+        return "systemd WireGuard/AWG routing service installed and synchronized"
 
     def exit_prepare_keys(self, protocol_type):
         out = self._run(
@@ -257,7 +258,8 @@ class BWAWGWireGuardTransport:
             f"docker exec -i {self.container} sh -c 'test -f {AWG_CONF} && "
             f"sed -i \"s|^# DnsViaExit = .*|# DnsViaExit = {value}|\" {AWG_CONF}'"
         )
-        return self._install_router(True, bool(enabled))
+        self._install_router(True, bool(enabled))
+        return "DNS traffic is routed " + ("through the Exit Node" if enabled else "through the entry server")
 
     def exit_link_info(self, protocol_type):
         out, err, code = self.ssh.run_sudo_command(
