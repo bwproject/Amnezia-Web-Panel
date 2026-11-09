@@ -4099,7 +4099,7 @@
                     const awgBtn = AWG_PROTOCOLS.includes(protoBase(proto))
                         ? `<button class="btn btn-secondary btn-sm" onclick="openAwgSettings('${proto}')" title="${_('awg_settings_title')}">${_('awg_settings_btn')}</button>`
                         : '';
-                    const exitBtn = AWG_PROTOCOLS.includes(protoBase(proto))
+                    const exitBtn = (AWG_PROTOCOLS.includes(protoBase(proto)) || protoBase(proto) === 'wireguard')
                         ? `<button class="btn btn-secondary btn-sm" onclick="openExitLinkModal('${proto}')" title="${_('exit_link_title')}">🚪${info.exit_link ? ' ' + escapeHtml(info.exit_link.exit_name || '') : ''}</button>`
                         : '';
                     const ep = PUBLIC_ENDPOINTS[proto];
