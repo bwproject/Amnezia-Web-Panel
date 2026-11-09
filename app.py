@@ -6886,12 +6886,33 @@ def _smartroute_error(e: SmartRouteError):
     return JSONResponse({'error': e.code, 'message': str(e)}, status_code=e.status_code)
 
 
+def _telegram_exit_available(data, exit_uid):
+    servers = data.get('servers') or []
+    for item in exit_link_svc.linked_entries(data, exit_uid):
+        if item.get('stale'):
+            continue
+        server_id = item.get('server_id')
+        if not isinstance(server_id, int) or not 0 <= server_id < len(servers):
+            continue
+        protocol = item.get('protocol') or ''
+        if protocol_base(protocol) not in tuple(AWG_PROTOCOLS) + ('wireguard',):
+            continue
+        record = ((servers[server_id].get('protocols') or {}).get(protocol) or {})
+        if record.get('installed'):
+            return True
+    return False
+
+
 @app.get('/api/exit-nodes', tags=["Servers"])
 def api_exit_nodes(request: Request):
     """Servers with an installed exit node, from data.json (no SSH)."""
     if not _check_admin(request):
         return JSONResponse({'error': 'Forbidden'}, status_code=403)
-    return {'status': 'success', 'exit_nodes': exit_link_svc.list_exit_nodes(load_data())}
+    data = load_data()
+    nodes = exit_link_svc.list_exit_nodes(data)
+    for node in nodes:
+        node['telegram_available'] = _telegram_exit_available(data, node['uid'])
+    return {'status': 'success', 'exit_nodes': nodes}
 
 
 @app.post('/api/servers/{server_id}/exit-link', tags=["Protocols"])
