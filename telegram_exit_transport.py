@@ -193,8 +193,14 @@ class TelegramExitHTTPClient:
         data = self._load_data()
         try:
             server, protocol, ssh, awg = self._find_entry(data, exit_uid)
-            container_name = awg._container_name(protocol)
-            source_ip = awg._get_subnet_ip(protocol)
+            if str(protocol).split('__', 1)[0] == "wireguard":
+                # Standard WG clients are routed through the server's existing
+                # AWG container; the WG gateway address is the policy-route source.
+                container_name = "amnezia-wireguard"
+                _, source_ip = awg.awg_transport._wg_network()
+            else:
+                container_name = awg._container_name(protocol)
+                source_ip = awg._get_subnet_ip(protocol)
             ipaddress.ip_address(source_ip)
         except Exception as exc:
             raise httpx.ConnectError(
