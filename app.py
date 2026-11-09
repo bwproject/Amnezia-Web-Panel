@@ -61,6 +61,8 @@ from managers.awg_plugin_updater import (
 )
 from managers.xray_manager import XrayManager
 from managers.wireguard_manager import WireGuardManager
+from managers.wireguard_exit_manager import WireGuardExitManager
+from bw_exit_manager import BWExitManager
 from managers.backup_manager import BackupManager
 import telegram_bot as tg_bot
 from telegram_exit_transport import TelegramExitHTTPClient
@@ -2050,7 +2052,7 @@ exit_link_svc = ExitLinkService(
     data_lock=DATA_LOCK,
     get_ssh=get_ssh,
     awg_manager_factory=lambda ssh: AWGManager(ssh),
-    wireguard_manager_factory=lambda ssh: __import__('managers.wireguard_exit_manager', fromlist=['WireGuardExitManager']).WireGuardExitManager(ssh),
+    wireguard_manager_factory=lambda ssh: WireGuardExitManager(ssh),
     exit_manager_factory=_exit_manager_factory,
     protocol_base=protocol_base,
     awg_protocols=AWG_PROTOCOLS,
@@ -2991,6 +2993,7 @@ class DuckDNSApplyRequest(BaseModel):
 class TelegramSettings(BaseModel):
     token: str = ''
     enabled: bool = False
+    exit_uid: str = ''
 
 
 class MailSettings(BaseModel):
@@ -10831,7 +10834,11 @@ def save_settings(request: Request, payload: SaveSettingsRequest):
                             status_code=400)
     previous_jump_uid = ((settings.get('ssh_jump') or {}).get('jump_host_uid') or '')
     settings['ssh_jump'] = {'jump_host_uid': jump_host_uid}
+    telegram_exit_uid = (payload.telegram.exit_uid or '').strip()
+    if telegram_exit_uid and not any(n.get('uid') == telegram_exit_uid for n in exit_link_svc.list_exit_nodes(data)):
+        return JSONResponse({'error': 'telegram_exit_not_available'}, status_code=400)
     settings['telegram'] = payload.telegram.dict()
+    settings['telegram']['exit_uid'] = telegram_exit_uid
     settings['ssl'] = payload.ssl.dict()
     settings['mail'] = merge_mail_settings(settings.get('mail'), payload.mail.dict())
 
@@ -10915,7 +10922,7 @@ def save_settings(request: Request, payload: SaveSettingsRequest):
     if tg_cfg.enabled and tg_cfg.token:
         if not tg_bot.is_running():
             logger.info("Starting Telegram bot (settings save)...")
-            tg_bot.launch_bot(tg_cfg.token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections)
+            tg_bot.launch_bot(tg_cfg.token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, http_client_factory=lambda: TelegramExitHTTPClient(load_data))
     else:
         if tg_bot.is_running():
             logger.info("Stopping Telegram bot (settings save)...")
@@ -11099,7 +11106,7 @@ async def api_telegram_toggle(request: Request):
         save_data(data)
         return {'status': 'stopped', 'bot_running': False}
     else:
-        tg_bot.launch_bot(token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections)
+        tg_bot.launch_bot(token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, http_client_factory=lambda: TelegramExitHTTPClient(load_data))
         tg_cfg['enabled'] = True
         data['settings']['telegram'] = tg_cfg
         save_data(data)
