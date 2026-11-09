@@ -3,7 +3,7 @@ name: Validate BW integration
 on:
   push:
     branches:
-      - BW-v1.8.9-integration
+      - BW
   pull_request:
     branches:
       - main
@@ -16,7 +16,7 @@ jobs:
   python-compile:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout integration branch
+      - name: Checkout BW branch
         uses: actions/checkout@v4
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -27,6 +27,7 @@ jobs:
           python -m py_compile \
             app.py \
             exit_link_service.py \
+            smartroute_service.py \
             telegram_bot.py \
             telegram_exit_transport.py \
             bw_exit_manager.py \
