@@ -63,6 +63,7 @@ from managers.xray_manager import XrayManager
 from managers.wireguard_manager import WireGuardManager
 from managers.backup_manager import BackupManager
 import telegram_bot as tg_bot
+from telegram_exit_transport import TelegramExitHTTPClient
 
 from exit_link_service import ExitLinkError, ExitLinkService
 from smartroute_service import SmartRouteError, SmartRouteService, split_instances
@@ -2039,8 +2040,8 @@ def _mail_error_response(exc: MailError, lang: str):
 
 
 def _exit_manager_factory(ssh):
-    from managers.exit_manager import ExitManager
-    return ExitManager(ssh)
+    from bw_exit_manager import BWExitManager
+    return BWExitManager(ssh)
 
 
 exit_link_svc = ExitLinkService(
@@ -2049,6 +2050,7 @@ exit_link_svc = ExitLinkService(
     data_lock=DATA_LOCK,
     get_ssh=get_ssh,
     awg_manager_factory=lambda ssh: AWGManager(ssh),
+    wireguard_manager_factory=lambda ssh: __import__('managers.wireguard_exit_manager', fromlist=['WireGuardExitManager']).WireGuardExitManager(ssh),
     exit_manager_factory=_exit_manager_factory,
     protocol_base=protocol_base,
     awg_protocols=AWG_PROTOCOLS,
@@ -3291,7 +3293,7 @@ async def startup():
     tg_cfg = data.get('settings', {}).get('telegram', {})
     if tg_cfg.get('enabled') and tg_cfg.get('token'):
         logger.info("Starting Telegram bot from saved settings...")
-        tg_bot.launch_bot(tg_cfg['token'], load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections)
+        tg_bot.launch_bot(tg_cfg['token'], load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, http_client_factory=lambda: TelegramExitHTTPClient(load_data))
 
 
 def _auto_backup_due(auto_backup: dict, now: Optional[datetime] = None) -> bool:
