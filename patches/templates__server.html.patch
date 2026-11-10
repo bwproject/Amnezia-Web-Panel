@@ -1,6 +1,6 @@
 --- a/templates/server.html
 +++ b/templates/server.html
-@@ -1383,6 +1383,27 @@ <h1 style="font-size:1.4rem; font-weight:700;">{{ server.name }}</h1>
+@@ -1383,6 +1383,27 @@
          </div>
      </div>
  
@@ -28,7 +28,7 @@
      <!-- SOCKS5 Card -->
      <div class="card card-hover protocol-card protocol-socks5" id="proto-socks5">
          <div class="protocol-card-head">
-@@ -1938,6 +1959,18 @@ <h2 class="modal-title" id="installModalTitle">{{ _('install_protocol') }}</h2>
+@@ -1938,6 +1959,18 @@
                      <div class="form-hint">{{ _('exit_obfuscation_hint') }}</div>
                  </div>
              </div>
@@ -47,7 +47,7 @@
              <div id="socks5Options"
                  style="display:none; padding: var(--space-md); background: rgba(0,0,0,0.03); border-radius: var(--radius-md); margin-bottom: var(--space-md);">
                  <div class="form-group">
-@@ -2371,6 +2404,35 @@ <h2 class="modal-title">{{ _('smartroute_title') }}</h2>
+@@ -2371,6 +2404,35 @@
      </div>
  </div>
  
@@ -83,7 +83,7 @@
  <!-- ===== SOCKS5 Settings Modal ===== -->
  <div class="modal-backdrop" id="socks5SettingsModal">
      <div class="modal">
-@@ -2676,6 +2738,7 @@ <h2 class="modal-title">📊 {{ _('host_tuning') }}</h2>
+@@ -2676,6 +2738,7 @@
          { proto: 'dns', category: 'services', icon: '🔍', title: 'AmneziaDNS', descKey: 'dns_desc' },
          { proto: 'adguard', category: 'services', icon: '🛡️', title: 'AdGuard Home', descKey: 'adguard_desc' },
          { proto: 'socks5', category: 'services', icon: '🧦', title: 'SOCKS5 Proxy', descKey: 'socks5_desc' },
@@ -91,7 +91,7 @@
          { proto: 'exit', category: 'services', icon: '🚪', title: 'Exit Node', descKey: 'exit_desc', badge: 'NEW' },
          { proto: 'smartroute', category: 'services', icon: '🧭', title: 'Smart Route', descKey: 'smartroute_desc', badge: 'NEW' },
          { proto: 'warp', category: 'services', icon: '☁️', title: 'Cloudflare WARP', descKey: 'srv_warp_card_desc' },
-@@ -2928,7 +2991,7 @@ <h2 class="modal-title">📊 {{ _('host_tuning') }}</h2>
+@@ -2928,7 +2991,7 @@
                                              </div>
                                          </div>
                                      </div>
@@ -100,7 +100,7 @@
                                      <button class="btn ${installed && !canInstallAnother ? 'btn-secondary' : 'btn-primary'} btn-sm" ${action}>
                                          ${isSmart ? _('smartroute_open') : (canInstallAnother ? _('install_another') : (installed ? _('installed') : _('install')))}
                                      </button>
-@@ -3903,19 +3966,20 @@ <h2 class="modal-title">📊 {{ _('host_tuning') }}</h2>
+@@ -3903,7 +3966,7 @@
  
      // Services that don't have per-user "connections" — they expose a single
      // shared endpoint (DNS/proxy/admin UI) rather than per-client configs.
@@ -109,7 +109,7 @@
  
      function buildServiceInfoGrid(proto, info) {
          // Custom info-grid markup for non-VPN services. Returns HTML for the grid body.
-         const base = protoBase(proto);
+@@ -3911,11 +3974,12 @@
          if (base === 'dns') {
              return `<div class="protocol-info-item"><span class="protocol-info-label">${_('port')}</span><span class="protocol-info-value">172.29.172.254:53 (Internal)</span></div>`;
          }
@@ -125,22 +125,23 @@
              `;
          }
          if (base === 'adguard') {
-@@ -4039,7 +4103,13 @@ <h2 class="modal-title">📊 {{ _('host_tuning') }}</h2>
+@@ -4039,8 +4103,14 @@
                  }
                  infoGrid.innerHTML = grid;
              }
 -            if (protoBase(proto) === 'socks5') {
 +            if (protoBase(proto) === 'http_proxy') {
-+                actionsEl.innerHTML = `
+                 actionsEl.innerHTML = `
 +                    <button class="btn btn-secondary btn-sm" onclick="openHttpProxySettings('${proto}')" style="flex:1">Settings</button>
 +                    <button class="btn btn-secondary btn-sm" onclick="showProtocolBackups('${proto}')">${_('backup')}</button>
 +                    <button class="btn btn-danger btn-sm" onclick="uninstallProtocol('${proto}')">${_('uninstall')}</button>
 +                `;
 +            } else if (protoBase(proto) === 'socks5') {
-                 actionsEl.innerHTML = `
++                actionsEl.innerHTML = `
                      <button class="btn btn-secondary btn-sm" onclick="openSocks5Settings('${proto}')" style="flex:1">${_('socks5_change_settings')}</button>
                      <button class="btn btn-secondary btn-sm" onclick="showProtocolBackups('${proto}')">${_('backup')}</button>
-@@ -4099,7 +4169,7 @@ <h2 class="modal-title">📊 {{ _('host_tuning') }}</h2>
+                     <button class="btn btn-danger btn-sm" onclick="uninstallProtocol('${proto}')">${_('uninstall')}</button>
+@@ -4099,7 +4169,7 @@
                      const awgBtn = AWG_PROTOCOLS.includes(protoBase(proto))
                          ? `<button class="btn btn-secondary btn-sm" onclick="openAwgSettings('${proto}')" title="${_('awg_settings_title')}">${_('awg_settings_btn')}</button>`
                          : '';
@@ -149,7 +150,7 @@
                          ? `<button class="btn btn-secondary btn-sm" onclick="openExitLinkModal('${proto}')" title="${_('exit_link_title')}">🚪${info.exit_link ? ' ' + escapeHtml(info.exit_link.exit_name || '') : ''}</button>`
                          : '';
                      const ep = PUBLIC_ENDPOINTS[proto];
-@@ -4648,13 +4718,15 @@ <h2 class="modal-title">📊 {{ _('host_tuning') }}</h2>
+@@ -4648,6 +4718,7 @@
          const portHint = document.getElementById('installPortHint');
          const telemtOpts = document.getElementById('telemtOptions');
          const socks5Opts = document.getElementById('socks5Options');
@@ -157,7 +158,7 @@
          const adguardOpts = document.getElementById('adguardOptions');
          const nginxOpts = document.getElementById('nginxOptions');
          const awgOpts = document.getElementById('awgOptions');
-         const exitOpts = document.getElementById('exitOptions');
+@@ -4655,6 +4726,7 @@
  
          telemtOpts.style.display = 'none';
          socks5Opts.style.display = 'none';
@@ -165,7 +166,7 @@
          adguardOpts.style.display = 'none';
          nginxOpts.style.display = 'none';
          awgOpts.style.display = 'none';
-@@ -4676,6 +4748,12 @@ <h2 class="modal-title">📊 {{ _('host_tuning') }}</h2>
+@@ -4676,6 +4748,12 @@
              portInput.disabled = false;
              portHint.textContent = currentInstallAnother ? _('port_next_instance_hint') : _('telemt_port_hint');
              telemtOpts.style.display = 'block';
@@ -178,7 +179,7 @@
          } else if (base === 'socks5') {
              portLabel.textContent = _('port') + ' (TCP)';
              portInput.value = currentInstallAnother ? nextSuggestedPort(currentInstallProto, 38080) : '38080';
-@@ -4841,6 +4919,9 @@ <h2 class="modal-title">📊 {{ _('host_tuning') }}</h2>
+@@ -4841,6 +4919,9 @@
                  params.tls_emulation = document.getElementById('installTelemtTls').checked;
                  params.tls_domain = document.getElementById('installTelemtDomain').value;
                  params.max_connections = parseInt(document.getElementById('installTelemtMaxConns').value) || 0;
@@ -188,7 +189,7 @@
              } else if (protoBase(currentInstallProto) === 'socks5') {
                  params.socks5_username = document.getElementById('installSocks5User').value || 'proxy_user';
                  params.socks5_password = document.getElementById('installSocks5Pass').value || '';
-@@ -5888,6 +5969,50 @@ <h2 class="modal-title">📊 {{ _('host_tuning') }}</h2>
+@@ -5888,6 +5969,50 @@
          }
      }
  
