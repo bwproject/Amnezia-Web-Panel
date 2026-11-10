@@ -1,3 +1,5 @@
+--- a/templates/server.html
++++ b/templates/server.html
 @@ -1383,6 +1383,27 @@ <h1 style="font-size:1.4rem; font-weight:700;">{{ server.name }}</h1>
          </div>
      </div>
