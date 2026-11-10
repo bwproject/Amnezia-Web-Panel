@@ -1,3 +1,5 @@
+--- a/templates/settings.html
++++ b/templates/settings.html
 @@ -75,6 +75,13 @@ <h3 class="card-title" style="margin-bottom: var(--space-lg);">{{ _('telegram_bo
                      <input type="text" class="form-input" id="tg_token" value="{{ telegram_settings.token or '' }}"
                          placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11">
