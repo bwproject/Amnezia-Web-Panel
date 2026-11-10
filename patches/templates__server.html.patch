@@ -1,0 +1,239 @@
+@@ -1383,6 +1383,27 @@ <h1 style="font-size:1.4rem; font-weight:700;">{{ server.name }}</h1>
+         </div>
+     </div>
+ 
++    <!-- HTTP Proxy Card -->
++    <div class="card card-hover protocol-card protocol-http-proxy" id="proto-http-proxy">
++        <div class="protocol-card-head">
++            <div class="protocol-icon">🌐</div>
++            <div class="protocol-name">HTTP Proxy (3proxy)</div>
++        </div>
++        <div class="flex gap-sm protocol-ctrl" id="http-proxy-ctrl" style="display:none!important;"></div>
++        <div class="protocol-desc">HTTP proxy with Basic authentication, managed by 3proxy.</div>
++        <div class="protocol-status" id="http-proxy-status">
++            <span class="badge badge-warn"><span class="badge-dot"></span> {{ _('not_checked') }}</span>
++        </div>
++        <div id="http-proxy-info" class="hidden">
++            <div class="protocol-info" id="http-proxy-info-grid"></div>
++        </div>
++        <div class="flex gap-sm" id="http-proxy-actions">
++            <button class="btn btn-primary btn-sm" onclick="openInstallModal('http_proxy')" id="http-proxy-install-btn" style="flex:1">
++                {{ _('install') }}
++            </button>
++        </div>
++    </div>
++
+     <!-- SOCKS5 Card -->
+     <div class="card card-hover protocol-card protocol-socks5" id="proto-socks5">
+         <div class="protocol-card-head">
+@@ -1938,6 +1959,18 @@ <h2 class="modal-title" id="installModalTitle">{{ _('install_protocol') }}</h2>
+                     <div class="form-hint">{{ _('exit_obfuscation_hint') }}</div>
+                 </div>
+             </div>
++            <div id="httpProxyOptions"
++                style="display:none; padding: var(--space-md); background: rgba(0,0,0,0.03); border-radius: var(--radius-md); margin-bottom: var(--space-md);">
++                <div class="form-group">
++                    <label class="form-label">HTTP proxy username</label>
++                    <input class="form-input" type="text" id="installHttpProxyUser" value="bw" autocomplete="off">
++                </div>
++                <div class="form-group">
++                    <label class="form-label">HTTP proxy password</label>
++                    <input class="form-input" type="password" id="installHttpProxyPass" value="bwbwbw" autocomplete="new-password">
++                </div>
++                <div class="form-hint">Basic authentication is required for every connection.</div>
++            </div>
+             <div id="socks5Options"
+                 style="display:none; padding: var(--space-md); background: rgba(0,0,0,0.03); border-radius: var(--radius-md); margin-bottom: var(--space-md);">
+                 <div class="form-group">
+@@ -2371,6 +2404,35 @@ <h2 class="modal-title">{{ _('smartroute_title') }}</h2>
+     </div>
+ </div>
+ 
++<!-- ===== HTTP Proxy Settings Modal ===== -->
++<div class="modal-backdrop" id="httpProxySettingsModal">
++    <div class="modal">
++        <div class="modal-header">
++            <h2 class="modal-title">HTTP Proxy settings</h2>
++            <button class="modal-close" onclick="closeModal('httpProxySettingsModal')">×</button>
++        </div>
++        <div class="form-group">
++            <label class="form-label">{{ _('port') }} (TCP)</label>
++            <input class="form-input" type="number" id="httpProxySetPort" min="1" max="65535">
++        </div>
++        <div class="form-group">
++            <label class="form-label">Username</label>
++            <input class="form-input" type="text" id="httpProxySetUser" autocomplete="off">
++        </div>
++        <div class="form-group">
++            <label class="form-label">Password</label>
++            <input class="form-input" type="password" id="httpProxySetPass" autocomplete="new-password">
++        </div>
++        <div class="modal-footer">
++            <button class="btn btn-secondary" onclick="closeModal('httpProxySettingsModal')">{{ _('cancel') }}</button>
++            <button class="btn btn-primary" onclick="saveHttpProxySettings()" id="httpProxySaveBtn">
++                <span id="httpProxySaveBtnText">{{ _('save') }}</span>
++                <div class="spinner hidden" id="httpProxySaveSpinner"></div>
++            </button>
++        </div>
++    </div>
++</div>
++
+ <!-- ===== SOCKS5 Settings Modal ===== -->
+ <div class="modal-backdrop" id="socks5SettingsModal">
+     <div class="modal">
+@@ -2676,6 +2738,7 @@ <h2 class="modal-title">📊 {{ _('host_tuning') }}</h2>
+         { proto: 'dns', category: 'services', icon: '🔍', title: 'AmneziaDNS', descKey: 'dns_desc' },
+         { proto: 'adguard', category: 'services', icon: '🛡️', title: 'AdGuard Home', descKey: 'adguard_desc' },
+         { proto: 'socks5', category: 'services', icon: '🧦', title: 'SOCKS5 Proxy', descKey: 'socks5_desc' },
++        { proto: 'http_proxy', category: 'services', icon: '🌐', title: 'HTTP Proxy (3proxy)', desc: 'Standard HTTP proxy with Basic authentication on a configurable TCP port.' },
+         { proto: 'exit', category: 'services', icon: '🚪', title: 'Exit Node', descKey: 'exit_desc', badge: 'NEW' },
+         { proto: 'smartroute', category: 'services', icon: '🧭', title: 'Smart Route', descKey: 'smartroute_desc', badge: 'NEW' },
+         { proto: 'warp', category: 'services', icon: '☁️', title: 'Cloudflare WARP', descKey: 'srv_warp_card_desc' },
+@@ -2928,7 +2991,7 @@ <h2 class="modal-title">📊 {{ _('host_tuning') }}</h2>
+                                             </div>
+                                         </div>
+                                     </div>
+-                                    <div class="marketplace-app-desc">${_(app.descKey)}</div>
++                                    <div class="marketplace-app-desc">${app.desc || _(app.descKey)}</div>
+                                     <button class="btn ${installed && !canInstallAnother ? 'btn-secondary' : 'btn-primary'} btn-sm" ${action}>
+                                         ${isSmart ? _('smartroute_open') : (canInstallAnother ? _('install_another') : (installed ? _('installed') : _('install')))}
+                                     </button>
+@@ -3903,19 +3966,20 @@ <h2 class="modal-title">📊 {{ _('host_tuning') }}</h2>
+ 
+     // Services that don't have per-user "connections" — they expose a single
+     // shared endpoint (DNS/proxy/admin UI) rather than per-client configs.
+-    const SERVICE_PROTOS = ['dns', 'socks5', 'adguard', 'nginx', 'exit'];
++    const SERVICE_PROTOS = ['dns', 'socks5', 'http_proxy', 'adguard', 'nginx', 'exit'];
+ 
+     function buildServiceInfoGrid(proto, info) {
+         // Custom info-grid markup for non-VPN services. Returns HTML for the grid body.
+         const base = protoBase(proto);
+         if (base === 'dns') {
+             return `<div class="protocol-info-item"><span class="protocol-info-label">${_('port')}</span><span class="protocol-info-value">172.29.172.254:53 (Internal)</span></div>`;
+         }
+-        if (base === 'socks5') {
+-            const user = info.username ? info.username : '—';
++        if (base === 'socks5' || base === 'http_proxy') {
++            const user = info.username ? escapeHtml(info.username) : '—';
++            const label = base === 'http_proxy' ? 'HTTP proxy username' : _('socks5_username');
+             return `
+                 <div class="protocol-info-item"><span class="protocol-info-label">${_('port')}</span><span class="protocol-info-value">${info.port}/TCP</span></div>
+-                <div class="protocol-info-item"><span class="protocol-info-label">${_('socks5_username')}</span><span class="protocol-info-value">${user}</span></div>
++                <div class="protocol-info-item"><span class="protocol-info-label">${label}</span><span class="protocol-info-value">${user}</span></div>
+             `;
+         }
+         if (base === 'adguard') {
+@@ -4039,7 +4103,13 @@ <h2 class="modal-title">📊 {{ _('host_tuning') }}</h2>
+                 }
+                 infoGrid.innerHTML = grid;
+             }
+-            if (protoBase(proto) === 'socks5') {
++            if (protoBase(proto) === 'http_proxy') {
++                actionsEl.innerHTML = `
++                    <button class="btn btn-secondary btn-sm" onclick="openHttpProxySettings('${proto}')" style="flex:1">Settings</button>
++                    <button class="btn btn-secondary btn-sm" onclick="showProtocolBackups('${proto}')">${_('backup')}</button>
++                    <button class="btn btn-danger btn-sm" onclick="uninstallProtocol('${proto}')">${_('uninstall')}</button>
++                `;
++            } else if (protoBase(proto) === 'socks5') {
+                 actionsEl.innerHTML = `
+                     <button class="btn btn-secondary btn-sm" onclick="openSocks5Settings('${proto}')" style="flex:1">${_('socks5_change_settings')}</button>
+                     <button class="btn btn-secondary btn-sm" onclick="showProtocolBackups('${proto}')">${_('backup')}</button>
+@@ -4099,7 +4169,7 @@ <h2 class="modal-title">📊 {{ _('host_tuning') }}</h2>
+                     const awgBtn = AWG_PROTOCOLS.includes(protoBase(proto))
+                         ? `<button class="btn btn-secondary btn-sm" onclick="openAwgSettings('${proto}')" title="${_('awg_settings_title')}">${_('awg_settings_btn')}</button>`
+                         : '';
+-                    const exitBtn = AWG_PROTOCOLS.includes(protoBase(proto))
++                    const exitBtn = (AWG_PROTOCOLS.includes(protoBase(proto)) || protoBase(proto) === 'wireguard')
+                         ? `<button class="btn btn-secondary btn-sm" onclick="openExitLinkModal('${proto}')" title="${_('exit_link_title')}">🚪${info.exit_link ? ' ' + escapeHtml(info.exit_link.exit_name || '') : ''}</button>`
+                         : '';
+                     const ep = PUBLIC_ENDPOINTS[proto];
+@@ -4648,13 +4718,15 @@ <h2 class="modal-title">📊 {{ _('host_tuning') }}</h2>
+         const portHint = document.getElementById('installPortHint');
+         const telemtOpts = document.getElementById('telemtOptions');
+         const socks5Opts = document.getElementById('socks5Options');
++        const httpProxyOpts = document.getElementById('httpProxyOptions');
+         const adguardOpts = document.getElementById('adguardOptions');
+         const nginxOpts = document.getElementById('nginxOptions');
+         const awgOpts = document.getElementById('awgOptions');
+         const exitOpts = document.getElementById('exitOptions');
+ 
+         telemtOpts.style.display = 'none';
+         socks5Opts.style.display = 'none';
++        httpProxyOpts.style.display = 'none';
+         adguardOpts.style.display = 'none';
+         nginxOpts.style.display = 'none';
+         awgOpts.style.display = 'none';
+@@ -4676,6 +4748,12 @@ <h2 class="modal-title">📊 {{ _('host_tuning') }}</h2>
+             portInput.disabled = false;
+             portHint.textContent = currentInstallAnother ? _('port_next_instance_hint') : _('telemt_port_hint');
+             telemtOpts.style.display = 'block';
++        } else if (base === 'http_proxy') {
++            portLabel.textContent = _('port') + ' (TCP)';
++            portInput.value = '4769';
++            portInput.disabled = false;
++            portHint.textContent = '3proxy HTTP listener';
++            httpProxyOpts.style.display = 'block';
+         } else if (base === 'socks5') {
+             portLabel.textContent = _('port') + ' (TCP)';
+             portInput.value = currentInstallAnother ? nextSuggestedPort(currentInstallProto, 38080) : '38080';
+@@ -4841,6 +4919,9 @@ <h2 class="modal-title">📊 {{ _('host_tuning') }}</h2>
+                 params.tls_emulation = document.getElementById('installTelemtTls').checked;
+                 params.tls_domain = document.getElementById('installTelemtDomain').value;
+                 params.max_connections = parseInt(document.getElementById('installTelemtMaxConns').value) || 0;
++            } else if (protoBase(currentInstallProto) === 'http_proxy') {
++                params.http_proxy_username = document.getElementById('installHttpProxyUser').value || 'bw';
++                params.http_proxy_password = document.getElementById('installHttpProxyPass').value || '';
+             } else if (protoBase(currentInstallProto) === 'socks5') {
+                 params.socks5_username = document.getElementById('installSocks5User').value || 'proxy_user';
+                 params.socks5_password = document.getElementById('installSocks5Pass').value || '';
+@@ -5888,6 +5969,50 @@ <h2 class="modal-title">📊 {{ _('host_tuning') }}</h2>
+         }
+     }
+ 
++    async function openHttpProxySettings(proto = 'http_proxy') {
++        try {
++            const data = await apiCall(`/api/servers/${SERVER_ID}/http-proxy/credentials?protocol=${encodeURIComponent(proto)}`);
++            document.getElementById('httpProxySetPort').value = data.port || 4769;
++            document.getElementById('httpProxySetUser').value = data.username || 'bw';
++            document.getElementById('httpProxySetPass').value = data.password || '';
++            window.currentHttpProxyProto = proto;
++            openModal('httpProxySettingsModal');
++        } catch (err) {
++            showToast(_('error') + ': ' + err.message, 'error');
++        }
++    }
++
++    async function saveHttpProxySettings() {
++        const btn = document.getElementById('httpProxySaveBtn');
++        const label = document.getElementById('httpProxySaveBtnText');
++        const spinner = document.getElementById('httpProxySaveSpinner');
++        const port = parseInt(document.getElementById('httpProxySetPort').value, 10);
++        const username = document.getElementById('httpProxySetUser').value.trim();
++        const password = document.getElementById('httpProxySetPass').value;
++        if (!Number.isInteger(port) || port < 1 || port > 65535 || !username || !password) {
++            showToast('Enter a valid port, username and password', 'error');
++            return;
++        }
++        btn.disabled = true;
++        label.textContent = _('saving') || 'Saving...';
++        spinner.classList.remove('hidden');
++        try {
++            const result = await apiCall(`/api/servers/${SERVER_ID}/http-proxy/credentials`, 'POST', {
++                protocol: window.currentHttpProxyProto || 'http_proxy', port, username, password
++            });
++            if (result.status !== 'success') throw new Error(result.message || result.error || 'Could not save settings');
++            closeModal('httpProxySettingsModal');
++            showToast('HTTP proxy settings saved', 'success');
++            setTimeout(() => checkServer(), 500);
++        } catch (err) {
++            showToast(_('error') + ': ' + err.message, 'error');
++        } finally {
++            btn.disabled = false;
++            label.textContent = _('save');
++            spinner.classList.add('hidden');
++        }
++    }
++
+     async function openSocks5Settings(proto = 'socks5') {
+         currentSocks5Proto = proto || 'socks5';
+         try {
