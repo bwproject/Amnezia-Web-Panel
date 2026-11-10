@@ -10222,11 +10222,28 @@ async def api_add_user_connection(request: Request, user_id: str, req: AddUserCo
         await asyncio.to_thread(ssh.connect)
         manager = get_protocol_manager(ssh, req.protocol)
         
+        config_available = True
         if req.client_id:
-            # Use existing client
+            # Existing native Amnezia peers have no private key on the server.
             target_client_id = req.client_id
-            # Retrieve config for existing client
-            config = await asyncio.to_thread(_manager_call, manager, 'get_client_config', req.protocol, req.client_id, pub_host, port, public_port=pub_port)
+            try:
+                config = await asyncio.to_thread(
+                    _manager_call, manager, 'get_client_config', req.protocol,
+                    req.client_id, pub_host, port, public_port=pub_port)
+            except RuntimeError as config_error:
+                missing_key = 'Client private key not stored. Config cannot be reconstructed.'
+                is_awg = protocol_base(req.protocol) in ('awg', 'awg2', 'awg3', 'awg_legacy')
+                if not is_awg or str(config_error) != missing_key:
+                    raise
+                clients = await asyncio.to_thread(_manager_call, manager, 'get_clients', req.protocol)
+                peer = next((item for item in clients if item.get('clientId') == req.client_id), None)
+                if not peer:
+                    raise
+                peer_data = peer.get('userData') or {}
+                if peer_data.get('clientPrivateKey') or peer_data.get('customConfig'):
+                    raise
+                config = None
+                config_available = False
             result = {'client_id': target_client_id, 'config': config}
         else:
             # Create new client
@@ -10254,12 +10271,18 @@ async def api_add_user_connection(request: Request, user_id: str, req: AddUserCo
                 'client_id': result['client_id'],
                 'name': req.name,
                 'created_at': datetime.now().isoformat(),
+                'config_available': config_available,
+                'external_client': not config_available,
             }
             data = load_data()
             data['user_connections'].append(conn)
             save_data(data)
 
-        resp = {'status': 'success'}
+        resp = {'status': 'success', 'config_available': config_available}
+        if not config_available:
+            resp['warning'] = (
+                'Peer linked, but its private key is not stored on the server. '
+                'Import the original client config to make it available in the panel.')
         if result.get('config'):
             resp['config'] = result['config']
             resp.update(config_payloads(result['config'], server, req.protocol))
