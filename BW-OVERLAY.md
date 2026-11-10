@@ -1,40 +1,31 @@
-# ProjectBW portable overlay
+# ProjectBW overlay (imp)
 
-This branch is intentionally based on the upstream `main` branch and contains only additive ProjectBW modules plus this integration manifest.
+This branch is the source of truth for ProjectBW-specific changes. It is based on upstream `main` and contains only:
 
-## Purpose
+- New BW-owned Python modules (complete files are appropriate because they do not exist upstream).
+- Focused unified-diff patches under `patches/` for modifications to upstream files.
+- The workflow that assembles and validates the complete `BW` branch.
 
-Keep ProjectBW-specific functionality separate from upstream application files so future upstream updates can be ported by applying a small, reviewable set of integration changes.
+## Branch roles
 
-## Included modules
+- `main`: untouched upstream Amnezia-Web-Panel.
+- `imp`: ProjectBW-only modules and minimal patches; no complete copies of upstream files such as `app.py`.
+- `BW`: generated, complete, buildable source tree made from the current `main` plus this branch.
 
-- `bw_exit_manager.py` — ProjectBW Exit Node management helpers.
-- `bw_wg_awg_transport.py` — transport and routing helpers for standard WireGuard through the server's AmneziaWG transport.
-- `managers/wireguard_exit_manager.py` — WireGuard-specific Exit Node adapter.
-- `telegram_exit_transport.py` — Telegram Bot API HTTP transport through a selected Exit Node.
+## Build flow
 
-## Deliberately not included
+1. Check out `main`.
+2. Copy the BW-only modules from this branch.
+3. Apply every `patches/*.patch` file. The workflow first runs `git apply --check`; a patch conflict stops the build.
+4. Compile the integrated Python modules and check whitespace errors.
+5. Synchronize the assembled tree into `BW`.
+6. Build and publish `ghcr.io/bwproject/amnezia-panel-bw:latest` and a short-SHA tag.
 
-This branch does not replace upstream `app.py`, `exit_link_service.py`, `smartroute_service.py`, `telegram_bot.py`, or HTML templates with older full-file copies. Those files change frequently upstream and must be integrated through small, reviewed patches.
+The workflow runs when relevant files change in `imp`, or manually via GitHub Actions. After updating upstream `main`, run it manually from `imp` to rebase the integration onto the new upstream version.
 
-## Integration points to maintain
+## Rules
 
-1. Register `BWExitManager` as the Exit Node manager factory.
-2. Inject `WireGuardExitManager` into the Exit Link service for `wireguard` protocol instances.
-3. Extend the Exit Link service's allowed protocol set to include standard WireGuard while preserving upstream AmneziaWG behavior, validation, cleanup and failover.
-4. Route standard WireGuard Smart Route operations through `WireGuardExitManager`; retain upstream Smart Route behavior for AmneziaWG.
-5. Inject `TelegramExitHTTPClient` as the Telegram Bot API HTTP client factory and expose a validated Exit Node selector in settings.
-6. Expose Exit Node controls for standard WireGuard in the server UI.
-7. Keep any UI/settings changes as focused patches against the current upstream templates; never copy the complete old templates over upstream.
-
-## Porting workflow
-
-1. Update this branch's base to the desired upstream commit.
-2. Review the additive modules against the upstream manager and transport APIs.
-3. Apply the integration points above as small commits, one concern per commit.
-4. Run Python compilation, unit/integration tests, and a real VPN routing test before merging.
-5. Build and publish the BW image only from a validated integration branch.
-
-## Safety
-
-This is a portability workspace, not a deployable release. It intentionally has no image-build workflow and does not modify `main` or the production `BW` branch.
+- Do not edit upstream files directly in `imp`; express changes as patches.
+- New BW-only files belong in the overlay as complete files.
+- Do not make untracked manual changes directly in `BW`; it is generated from `main` + `imp`.
+- Never merge `imp` or `BW` into `main`.
