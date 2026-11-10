@@ -1,6 +1,6 @@
 --- a/exit_link_service.py
 +++ b/exit_link_service.py
-@@ -47,12 +47,15 @@ class ExitLinkService:
+@@ -47,12 +47,15 @@
      def __init__(self, *, load_data, save_data, data_lock, get_ssh,
                   awg_manager_factory, exit_manager_factory,
                   protocol_base, awg_protocols, protocol_display_name,
@@ -16,7 +16,7 @@
          self.exit_manager_factory = exit_manager_factory
          self.protocol_base = protocol_base
          self.awg_protocols = awg_protocols
-@@ -110,8 +113,8 @@ def _entry(self, data, server_id, protocol):
+@@ -110,8 +113,8 @@
          if not isinstance(server_id, int) or server_id < 0 or server_id >= len(servers):
              raise ExitLinkError('server_not_found', 'Server not found', 404)
          server = servers[server_id]
@@ -27,7 +27,7 @@
          rec = (server.get('protocols') or {}).get(protocol)
          if not rec or not rec.get('installed'):
              raise ExitLinkError('protocol_not_installed', f'{protocol} is not installed on this server')
-@@ -132,10 +135,28 @@ def _entry_by_uid(self, data, uid, protocol):
+@@ -132,11 +135,29 @@
              raise ExitLinkError('server_not_found', 'Entry server no longer exists', 404)
          return self._entry(data, index, protocol)
  
@@ -40,7 +40,7 @@
 +        if self.protocol_base(protocol) == 'wireguard' and self.wireguard_manager_factory:
 +            return self.wireguard_manager_factory(ssh)
 +        return self.awg_manager_factory(ssh)
-+
+ 
 +    @staticmethod
 +    def _add_exit_peer(exit_manager, protocol, peer_id, name, public_key):
 +        # Exit Nodes expose one AWG transit. Standard WG entries reach it
@@ -55,10 +55,11 @@
 +            if cleanup:
 +                cleanup(peer_id=peer_id, public_key=public_key)
 +        return removed
- 
++
      async def _exit_manager(self, server):
          return self.exit_manager_factory(await asyncio.to_thread(self.get_ssh, server))
-@@ -179,7 +200,7 @@ async def _wait_handshake(self, awg, protocol):
+ 
+@@ -179,7 +200,7 @@
  
      async def _rollback(self, awg, protocol, exit_manager, peer_id):
          for what, call in (('entry unlink', lambda: awg.exit_unlink(protocol)),
@@ -67,7 +68,7 @@
              try:
                  await asyncio.to_thread(call)
              except Exception as err:  # the original error is what the user must see
-@@ -208,7 +229,7 @@ async def set_dns_via_exit(self, entry_server_id, protocol, enabled):
+@@ -208,7 +229,7 @@
              exit_srv, _ = self._exit(data, link.get('exit_uid'))
              self._require_exit_dns(exit_srv)
          async with self._locks[(entry['uid'], protocol)]:
@@ -76,7 +77,7 @@
              try:
                  log = await asyncio.to_thread(awg.exit_set_dns_via_exit, protocol, enabled)
              except Exception as err:
-@@ -271,32 +292,35 @@ async def _go():
+@@ -271,32 +292,35 @@
              if restore_on_failure and not previous.get('exit_uid'):
                  raise ExitLinkError('not_linked', 'This instance is not linked to an exit node')
  
@@ -133,7 +134,7 @@
              if ipv6:
                  # The exit node publishes only IPv4: a dual-stack tunnel would
                  # send IPv6 into a black hole. Refuse at any peer count.
-@@ -335,7 +359,7 @@ async def rolled_back():
+@@ -335,7 +359,7 @@
                      except Exception as err:
                          logger.warning("exit failover restore failed, falling back to unlink: %s", err)
                      try:
@@ -142,7 +143,7 @@
                      except Exception as err:
                          logger.warning("exit link rollback: exit remove_peer failed: %s", err)
                      if restored:
-@@ -350,7 +374,7 @@ async def rolled_back():
+@@ -350,7 +374,7 @@
              record = (entry.get('protocols') or {}).get(protocol, {})
              label = self.protocol_display_name(protocol, record.get('header_protection'), record.get('protocol_version'))
              name = f"{entry.get('name') or entry.get('host', '')} / {label}"
@@ -151,7 +152,7 @@
              link = {
                  'exit_uid': exit_uid,
                  'exit_name': exit_srv.get('name') or exit_srv.get('host', ''),
-@@ -385,7 +409,7 @@ async def rolled_back():
+@@ -385,7 +409,7 @@
                  try:
                      old_exit, _ = self._exit(data, previous['exit_uid'])
                      old_exit_manager = await self._exit_manager(old_exit)
@@ -160,7 +161,7 @@
                  except Exception as err:
                      logger.warning("previous exit %s unreachable, peer left behind: %s", previous['exit_uid'], err)
                      warnings.append('old_exit_unreachable_orphan_peer')
-@@ -434,7 +458,7 @@ async def unlink(self, entry_server_id, protocol):
+@@ -434,7 +458,7 @@
              if not link:
                  return {'status': 'success', 'warnings': [], 'unlinked': False}
              # Entry first: direct egress must come back even when the exit is dead.
@@ -169,7 +170,7 @@
              await asyncio.to_thread(awg.exit_unlink, protocol)
              try:
                  exit_srv, _ = self._exit(data, link.get('exit_uid'))
-@@ -486,7 +510,7 @@ async def reconcile_after_restore(self, server_id, protocol):
+@@ -486,7 +510,7 @@
              entries = await self.relink_entries_for_exit(uid) if uid else []
              return {'exit_entries_relinked': entries} if entries else {}
  
@@ -178,7 +179,7 @@
              return {}
          try:
              entry, rec = self._entry(data, server_id, protocol)
-@@ -508,7 +532,7 @@ async def reconcile_after_restore(self, server_id, protocol):
+@@ -508,7 +532,7 @@
          # The panel knows of no link, so a link file coming out of the archive
          # would silently route clients through an exit nobody is tracking.
          try:
@@ -187,7 +188,7 @@
              info = await asyncio.to_thread(awg.exit_link_info, protocol)
          except Exception as err:
              logger.warning("could not read the link state after restore: %s", err)
-@@ -537,7 +561,7 @@ async def detach_entries_for_exit(self, exit_uid, reason):
+@@ -537,7 +561,7 @@
                      # to the current link, not to the exit being removed.
                      continue
                  try:
@@ -196,7 +197,7 @@
                      await asyncio.to_thread(awg.exit_unlink, protocol)
                      def remove_current(record):
                          if record.get('exit_link') != link:
-@@ -571,8 +595,8 @@ async def forget_entry_peers(self, server):
+@@ -571,8 +595,8 @@
                  try:
                      exit_srv, _ = self._exit(data, link['exit_uid'])
                      exit_manager = await self._exit_manager(exit_srv)
@@ -207,7 +208,7 @@
                      results.append({'protocol': proto, 'exit_uid': link['exit_uid'], 'status': 'success'})
                  except Exception as err:
                      logger.warning("could not drop peer for %s on exit %s: %s", proto, link['exit_uid'], err)
-@@ -596,7 +620,7 @@ async def check_egress(self, entry_server_id, protocol):
+@@ -596,7 +620,7 @@
          link = rec.get('exit_link')
          if not link:
              raise ExitLinkError('not_linked', 'This instance is not linked to an exit node')
@@ -216,7 +217,7 @@
          try:
              probe = await asyncio.to_thread(awg.exit_check_egress, protocol)
          except RuntimeError as err:
-@@ -625,7 +649,7 @@ async def check_egress(self, entry_server_id, protocol):
+@@ -625,7 +649,7 @@
      async def status(self, entry_server_id, protocol):
          data = self.load_data()
          entry, rec = self._entry(data, entry_server_id, protocol)
@@ -225,7 +226,7 @@
          link_status = await asyncio.to_thread(awg.exit_link_status, protocol)
          try:
              mtu = int(await asyncio.to_thread(awg._get_mtu, protocol) or 0)
-@@ -781,7 +805,7 @@ def mutate(r):
+@@ -781,7 +805,7 @@
          }
  
      async def _probe_active(self, entry, protocol, cfg):
