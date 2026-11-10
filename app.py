@@ -8172,6 +8172,7 @@ CONTAINER_NAMES = {
     'dns': 'amnezia-dns',
     'wireguard': 'amnezia-wireguard',
     'socks5': 'amnezia-socks5proxy',
+    'http_proxy': 'http-proxy',
     'adguard': 'amnezia-adguard',
     'nginx': 'amnezia-nginx',
 }
