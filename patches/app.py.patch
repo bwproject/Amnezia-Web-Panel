@@ -1,0 +1,296 @@
+@@ -61,8 +61,11 @@
+ )
+ from managers.xray_manager import XrayManager
+ from managers.wireguard_manager import WireGuardManager
++from managers.wireguard_exit_manager import WireGuardExitManager
++from bw_exit_manager import BWExitManager
+ from managers.backup_manager import BackupManager
+ import telegram_bot as tg_bot
++from telegram_exit_transport import TelegramExitHTTPClient
+ 
+ from exit_link_service import ExitLinkError, ExitLinkService
+ from smartroute_service import SmartRouteError, SmartRouteService, split_instances
+@@ -1390,7 +1393,7 @@ async def wait_for_tunnel_url(provider: str, seconds: int = 20):
+     return get_tunnel_status(provider)
+ 
+ 
+-BASE_PROTOCOLS = ['awg', 'awg2', 'awg3', 'awg_legacy', 'xray', 'telemt', 'dns', 'wireguard', 'socks5', 'adguard', 'nginx', 'exit']
++BASE_PROTOCOLS = ['awg', 'awg2', 'awg3', 'awg_legacy', 'xray', 'telemt', 'dns', 'wireguard', 'socks5', 'http_proxy', 'adguard', 'nginx', 'exit']
+ MULTI_INSTANCE_PROTOCOLS = {'awg', 'awg2', 'awg3', 'awg_legacy', 'xray', 'telemt', 'socks5'}
+ 
+ 
+@@ -1472,6 +1475,7 @@ def protocol_container_name(protocol: str) -> Optional[str]:
+         'dns': 'amnezia-dns',
+         'wireguard': 'amnezia-wireguard',
+         'socks5': 'amnezia-socks5proxy',
++        'http_proxy': 'http-proxy',
+         'adguard': 'amnezia-adguard',
+         'nginx': 'amnezia-nginx',
+         'exit': 'amnezia-exit',
+@@ -1503,6 +1507,9 @@ def get_protocol_manager(ssh, protocol: str):
+     elif base == 'socks5':
+         from managers.socks5_manager import Socks5Manager
+         return Socks5Manager(ssh, protocol)
++    elif base == 'http_proxy':
++        from managers.http_proxy_manager import HttpProxyManager
++        return HttpProxyManager(ssh, protocol)
+     elif base == 'adguard':
+         from managers.adguard_manager import AdguardManager
+         return AdguardManager(ssh)
+@@ -1666,6 +1673,7 @@ def protocol_short_name(protocol: str, header_protection=False, protocol_version
+         'xray': 'Xray',
+         'telemt': 'Telemt',
+         'socks5': 'SOCKS5',
++        'http_proxy': 'HTTP',
+         'dns': 'DNS',
+         'adguard': 'AdGuard',
+         'nginx': 'NGINX',
+@@ -2039,8 +2047,8 @@ def _mail_error_response(exc: MailError, lang: str):
+ 
+ 
+ def _exit_manager_factory(ssh):
+-    from managers.exit_manager import ExitManager
+-    return ExitManager(ssh)
++    from bw_exit_manager import BWExitManager
++    return BWExitManager(ssh)
+ 
+ 
+ exit_link_svc = ExitLinkService(
+@@ -2049,6 +2057,7 @@ def _exit_manager_factory(ssh):
+     data_lock=DATA_LOCK,
+     get_ssh=get_ssh,
+     awg_manager_factory=lambda ssh: AWGManager(ssh),
++    wireguard_manager_factory=lambda ssh: WireGuardExitManager(ssh),
+     exit_manager_factory=_exit_manager_factory,
+     protocol_base=protocol_base,
+     awg_protocols=AWG_PROTOCOLS,
+@@ -2681,6 +2690,9 @@ class InstallProtocolRequest(BaseModel):
+     # SOCKS5
+     socks5_username: Optional[str] = None
+     socks5_password: Optional[str] = None
++    # HTTP proxy (3proxy)
++    http_proxy_username: Optional[str] = None
++    http_proxy_password: Optional[str] = None
+     # AdGuard Home
+     adguard_mode: Optional[str] = None  # 'replace' or 'sidebyside'
+     adguard_web_port: Optional[int] = None
+@@ -2800,6 +2812,13 @@ class Socks5SettingsRequest(BaseModel):
+     password: Optional[str] = None
+ 
+ 
++class HttpProxySettingsRequest(BaseModel):
++    protocol: str = 'http_proxy'
++    port: Optional[int] = None
++    username: Optional[str] = None
++    password: Optional[str] = None
++
++
+ class ProtocolRequest(BaseModel):
+     protocol: str = 'awg'
+ 
+@@ -2989,6 +3008,7 @@ class DuckDNSApplyRequest(BaseModel):
+ class TelegramSettings(BaseModel):
+     token: str = ''
+     enabled: bool = False
++    exit_uid: str = ''
+ 
+ 
+ class MailSettings(BaseModel):
+@@ -3291,7 +3311,7 @@ async def startup():
+     tg_cfg = data.get('settings', {}).get('telegram', {})
+     if tg_cfg.get('enabled') and tg_cfg.get('token'):
+         logger.info("Starting Telegram bot from saved settings...")
+-        tg_bot.launch_bot(tg_cfg['token'], load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections)
++        tg_bot.launch_bot(tg_cfg['token'], load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, http_client_factory=lambda: TelegramExitHTTPClient(load_data))
+ 
+ 
+ def _auto_backup_due(auto_backup: dict, now: Optional[datetime] = None) -> bool:
+@@ -6119,7 +6139,7 @@ def get_used_ports(ssh):
+ INSTALL_PORT_TRANSPORT = {
+     'awg': 'udp', 'awg2': 'udp', 'awg3': 'udp', 'awg_legacy': 'udp',
+     'wireguard': 'udp', 'exit': 'udp',
+-    'xray': 'tcp', 'telemt': 'tcp', 'socks5': 'tcp', 'nginx': 'tcp',
++    'xray': 'tcp', 'telemt': 'tcp', 'socks5': 'tcp', 'http_proxy': 'tcp', 'nginx': 'tcp',
+ }
+ 
+ 
+@@ -6571,6 +6591,14 @@ async def api_install_protocol(request: Request, server_id: int, req: InstallPro
+                 username=req.socks5_username,
+                 password=req.socks5_password,
+             )
++        elif install_base == 'http_proxy':
++            install_args = ()
++            install_kwargs = dict(
++                protocol_type=install_protocol,
++                port=req.port,
++                username=req.http_proxy_username,
++                password=req.http_proxy_password,
++            )
+         elif install_base == 'adguard':
+             install_args = ()
+             install_kwargs = dict(
+@@ -6645,6 +6673,8 @@ async def api_install_protocol(request: Request, server_id: int, req: InstallPro
+             proto_record['mtu'] = result['mtu']
+         if result.get('dns'):
+             proto_record['dns'] = result['dns']
++        if install_base == 'http_proxy':
++            proto_record['username'] = result.get('username')
+         if install_base == 'adguard':
+             proto_record['mode'] = result.get('mode')
+             proto_record['internal_ip'] = result.get('internal_ip')
+@@ -6731,6 +6761,73 @@ async def api_install_protocol(request: Request, server_id: int, req: InstallPro
+         return JSONResponse({'error': str(e)}, status_code=500)
+ 
+ 
++@app.get('/api/servers/{server_id}/http-proxy/credentials', tags=["Protocols"])
++def api_http_proxy_get_credentials(request: Request, server_id: int, protocol: str = 'http_proxy'):
++    """Return the current HTTP proxy port and Basic Auth credentials."""
++    if not _check_admin(request):
++        return JSONResponse({'error': 'Forbidden'}, status_code=403)
++    ssh = None
++    try:
++        data = load_data()
++        if server_id < 0 or server_id >= len(data['servers']):
++            return JSONResponse({'error': 'Server not found'}, status_code=404)
++        if not is_valid_protocol(protocol) or protocol_base(protocol) != 'http_proxy':
++            protocol = 'http_proxy'
++        ssh = get_ssh(data['servers'][server_id])
++        ssh.connect()
++        creds = get_protocol_manager(ssh, protocol).get_credentials()
++        return {'status': 'success', **creds}
++    except Exception as e:
++        logger.exception("Error reading HTTP proxy credentials")
++        return JSONResponse({'error': str(e)}, status_code=500)
++    finally:
++        if ssh:
++            ssh.disconnect()
++
++
++@app.post('/api/servers/{server_id}/http-proxy/credentials', tags=["Protocols"])
++def api_http_proxy_update_credentials(request: Request, server_id: int, req: HttpProxySettingsRequest):
++    """Update the HTTP proxy config and recreate the container if its port changes."""
++    if not _check_admin(request):
++        return JSONResponse({'error': 'Forbidden'}, status_code=403)
++    ssh = None
++    try:
++        data = load_data()
++        if server_id < 0 or server_id >= len(data['servers']):
++            return JSONResponse({'error': 'Server not found'}, status_code=404)
++        server = data['servers'][server_id]
++        protocol = req.protocol if is_valid_protocol(req.protocol) and protocol_base(req.protocol) == 'http_proxy' else 'http_proxy'
++        ssh = get_ssh(server)
++        ssh.connect()
++        manager = get_protocol_manager(ssh, protocol)
++        current = manager.get_credentials()
++        if req.port is not None and current.get('port') and int(req.port) != int(current['port']):
++            used = get_used_ports(ssh)
++            owner = used.get('tcp', {}).get(str(req.port))
++            if owner:
++                return JSONResponse({'error': f'Port {req.port}/TCP is already used by {owner}. Choose another port.'}, status_code=400)
++        result = manager.update_credentials(
++            port=req.port, username=req.username, password=req.password)
++        if result.get('status') == 'success':
++            record = server.setdefault('protocols', {}).setdefault(protocol, {})
++            record.update({
++                'installed': True, 'port': str(result.get('port')),
++                'username': result.get('username'), 'base_protocol': 'http_proxy',
++                'instance': protocol_instance(protocol), 'display_name': protocol_display_name(protocol),
++                'container_name': protocol_container_name(protocol),
++            })
++            save_data(data)
++        return result
++    except ValueError as e:
++        return JSONResponse({'error': str(e)}, status_code=400)
++    except Exception as e:
++        logger.exception("Error updating HTTP proxy credentials")
++        return JSONResponse({'error': str(e)}, status_code=500)
++    finally:
++        if ssh:
++            ssh.disconnect()
++
++
+ @app.get('/api/servers/{server_id}/socks5/credentials', tags=["Protocols"])
+ def api_socks5_get_credentials(request: Request, server_id: int, protocol: str = 'socks5'):
+     """Return the current SOCKS5 port/username/password for the panel UI."""
+@@ -6881,12 +6978,33 @@ def _smartroute_error(e: SmartRouteError):
+     return JSONResponse({'error': e.code, 'message': str(e)}, status_code=e.status_code)
+ 
+ 
++def _telegram_exit_available(data, exit_uid):
++    servers = data.get('servers') or []
++    for item in exit_link_svc.linked_entries(data, exit_uid):
++        if item.get('stale'):
++            continue
++        server_id = item.get('server_id')
++        if not isinstance(server_id, int) or not 0 <= server_id < len(servers):
++            continue
++        protocol = item.get('protocol') or ''
++        if protocol_base(protocol) not in tuple(AWG_PROTOCOLS) + ('wireguard',):
++            continue
++        record = ((servers[server_id].get('protocols') or {}).get(protocol) or {})
++        if record.get('installed'):
++            return True
++    return False
++
++
+ @app.get('/api/exit-nodes', tags=["Servers"])
+ def api_exit_nodes(request: Request):
+     """Servers with an installed exit node, from data.json (no SSH)."""
+     if not _check_admin(request):
+         return JSONResponse({'error': 'Forbidden'}, status_code=403)
+-    return {'status': 'success', 'exit_nodes': exit_link_svc.list_exit_nodes(load_data())}
++    data = load_data()
++    nodes = exit_link_svc.list_exit_nodes(data)
++    for node in nodes:
++        node['telegram_available'] = _telegram_exit_available(data, node['uid'])
++    return {'status': 'success', 'exit_nodes': nodes}
+ 
+ 
+ @app.post('/api/servers/{server_id}/exit-link', tags=["Protocols"])
+@@ -8064,6 +8182,7 @@ async def api_uninstall_protocol(request: Request, server_id: int, req: Protocol
+     'dns': 'amnezia-dns',
+     'wireguard': 'amnezia-wireguard',
+     'socks5': 'amnezia-socks5proxy',
++    'http_proxy': 'http-proxy',
+     'adguard': 'amnezia-adguard',
+     'nginx': 'amnezia-nginx',
+ }
+@@ -8677,7 +8796,7 @@ async def api_set_protocol_public_endpoint(request: Request, server_id: int, req
+ # TCP for the rest. DNS resolvers and the exit node have nothing to publish.
+ PUBLIC_FORWARD_L4 = {
+     'udp': ('awg', 'awg2', 'awg3', 'awg_legacy', 'wireguard'),
+-    'tcp': ('xray', 'telemt', 'socks5', 'nginx'),
++    'tcp': ('xray', 'telemt', 'socks5', 'http_proxy', 'nginx'),
+ }
+ 
+ # Seconds before the startup re-apply touches SSH, so the panel is serving
+@@ -10829,7 +10948,11 @@ def save_settings(request: Request, payload: SaveSettingsRequest):
+                             status_code=400)
+     previous_jump_uid = ((settings.get('ssh_jump') or {}).get('jump_host_uid') or '')
+     settings['ssh_jump'] = {'jump_host_uid': jump_host_uid}
++    telegram_exit_uid = (payload.telegram.exit_uid or '').strip()
++    if telegram_exit_uid and not any(n.get('uid') == telegram_exit_uid for n in exit_link_svc.list_exit_nodes(data)):
++        return JSONResponse({'error': 'telegram_exit_not_available'}, status_code=400)
+     settings['telegram'] = payload.telegram.dict()
++    settings['telegram']['exit_uid'] = telegram_exit_uid
+     settings['ssl'] = payload.ssl.dict()
+     settings['mail'] = merge_mail_settings(settings.get('mail'), payload.mail.dict())
+ 
+@@ -10913,7 +11036,7 @@ def save_settings(request: Request, payload: SaveSettingsRequest):
+     if tg_cfg.enabled and tg_cfg.token:
+         if not tg_bot.is_running():
+             logger.info("Starting Telegram bot (settings save)...")
+-            tg_bot.launch_bot(tg_cfg.token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections)
++            tg_bot.launch_bot(tg_cfg.token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, http_client_factory=lambda: TelegramExitHTTPClient(load_data))
+     else:
+         if tg_bot.is_running():
+             logger.info("Stopping Telegram bot (settings save)...")
+@@ -11097,7 +11220,7 @@ async def api_telegram_toggle(request: Request):
+         save_data(data)
+         return {'status': 'stopped', 'bot_running': False}
+     else:
+-        tg_bot.launch_bot(token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections)
++        tg_bot.launch_bot(token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, http_client_factory=lambda: TelegramExitHTTPClient(load_data))
+         tg_cfg['enabled'] = True
+         data['settings']['telegram'] = tg_cfg
+         save_data(data)
