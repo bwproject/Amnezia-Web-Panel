@@ -1,6 +1,7 @@
 --- a/app.py
 +++ b/app.py
-@@ -61,8 +61,11 @@
+@@ -60,10 +60,13 @@
+     stage_step as awg_plugin_stage_step,
  )
  from managers.xray_manager import XrayManager
  from managers.wireguard_manager import WireGuardManager
@@ -12,7 +13,9 @@
  
  from exit_link_service import ExitLinkError, ExitLinkService
  from smartroute_service import SmartRouteError, SmartRouteService, split_instances
-@@ -1390,7 +1393,7 @@
+ from warp_service import (
+@@ -1389,9 +1392,9 @@
+         await asyncio.sleep(0.5)
      return get_tunnel_status(provider)
  
  
@@ -21,7 +24,9 @@
  MULTI_INSTANCE_PROTOCOLS = {'awg', 'awg2', 'awg3', 'awg_legacy', 'xray', 'telemt', 'socks5'}
  
  
-@@ -1472,6 +1475,7 @@
+ def backfill_server_uids(servers) -> bool:
+@@ -1471,8 +1474,9 @@
+         'telemt': 'telemt',
          'dns': 'amnezia-dns',
          'wireguard': 'amnezia-wireguard',
          'socks5': 'amnezia-socks5proxy',
@@ -29,7 +34,9 @@
          'adguard': 'amnezia-adguard',
          'nginx': 'amnezia-nginx',
          'exit': 'amnezia-exit',
-@@ -1503,6 +1507,9 @@
+     }
+@@ -1502,8 +1506,11 @@
+         return WireGuardManager(ssh)
      elif base == 'socks5':
          from managers.socks5_manager import Socks5Manager
          return Socks5Manager(ssh, protocol)
@@ -39,7 +46,9 @@
      elif base == 'adguard':
          from managers.adguard_manager import AdguardManager
          return AdguardManager(ssh)
-@@ -1666,6 +1673,7 @@
+     elif base == 'nginx':
+@@ -1665,8 +1672,9 @@
+         'wireguard': 'WG',
          'xray': 'Xray',
          'telemt': 'Telemt',
          'socks5': 'SOCKS5',
@@ -47,7 +56,9 @@
          'dns': 'DNS',
          'adguard': 'AdGuard',
          'nginx': 'NGINX',
-@@ -2039,8 +2047,8 @@
+         'exit': 'Exit',
+@@ -2038,18 +2046,19 @@
+                         status_code=exc.status_code)
  
  
  def _exit_manager_factory(ssh):
@@ -58,7 +69,8 @@
  
  
  exit_link_svc = ExitLinkService(
-@@ -2049,6 +2057,7 @@
+     load_data=load_data,
+     save_data=save_data,
      data_lock=DATA_LOCK,
      get_ssh=get_ssh,
      awg_manager_factory=lambda ssh: AWGManager(ssh),
@@ -66,7 +78,9 @@
      exit_manager_factory=_exit_manager_factory,
      protocol_base=protocol_base,
      awg_protocols=AWG_PROTOCOLS,
-@@ -2681,6 +2690,9 @@
+     protocol_display_name=protocol_display_name,
+@@ -2680,8 +2689,11 @@
+     max_connections: Optional[int] = None
      # SOCKS5
      socks5_username: Optional[str] = None
      socks5_password: Optional[str] = None
@@ -76,7 +90,9 @@
      # AdGuard Home
      adguard_mode: Optional[str] = None  # 'replace' or 'sidebyside'
      adguard_web_port: Optional[int] = None
-@@ -2800,6 +2812,13 @@
+     adguard_expose_web: Optional[bool] = None
+@@ -2799,8 +2811,15 @@
+     username: Optional[str] = None
      password: Optional[str] = None
  
  
@@ -90,7 +106,9 @@
  class ProtocolRequest(BaseModel):
      protocol: str = 'awg'
  
-@@ -2989,6 +3008,7 @@
+ 
+@@ -2988,8 +3007,9 @@
+ 
  class TelegramSettings(BaseModel):
      token: str = ''
      enabled: bool = False
@@ -98,7 +116,9 @@
  
  
  class MailSettings(BaseModel):
-@@ -3291,7 +3311,7 @@
+     enabled: bool = False
+@@ -3290,9 +3310,9 @@
+     # Start Telegram bot if enabled
      tg_cfg = data.get('settings', {}).get('telegram', {})
      if tg_cfg.get('enabled') and tg_cfg.get('token'):
          logger.info("Starting Telegram bot from saved settings...")
@@ -107,7 +127,9 @@
  
  
  def _auto_backup_due(auto_backup: dict, now: Optional[datetime] = None) -> bool:
-@@ -6119,7 +6139,7 @@
+     if not auto_backup.get('enabled'):
+@@ -6118,9 +6138,9 @@
+ # mapped to their transport. dns/adguard are skipped (internal bindings).
  INSTALL_PORT_TRANSPORT = {
      'awg': 'udp', 'awg2': 'udp', 'awg3': 'udp', 'awg_legacy': 'udp',
      'wireguard': 'udp', 'exit': 'udp',
@@ -116,7 +138,9 @@
  }
  
  
-@@ -6571,6 +6591,14 @@
+ @app.get('/api/servers/{server_id}/used-ports', tags=["Servers"])
+@@ -6570,8 +6590,16 @@
+                 port=req.port,
                  username=req.socks5_username,
                  password=req.socks5_password,
              )
@@ -131,7 +155,9 @@
          elif install_base == 'adguard':
              install_args = ()
              install_kwargs = dict(
-@@ -6645,6 +6673,8 @@
+                 protocol_type='adguard',
+@@ -6644,8 +6672,10 @@
+         if result.get('mtu'):
              proto_record['mtu'] = result['mtu']
          if result.get('dns'):
              proto_record['dns'] = result['dns']
@@ -140,7 +166,9 @@
          if install_base == 'adguard':
              proto_record['mode'] = result.get('mode')
              proto_record['internal_ip'] = result.get('internal_ip')
-@@ -6731,6 +6761,73 @@
+             proto_record['web_port'] = result.get('web_port')
+@@ -6730,8 +6760,75 @@
+             op_finish(op, 'failed', error={'code': 'internal_error', 'message': str(e)})
          return JSONResponse({'error': str(e)}, status_code=500)
  
  
@@ -214,7 +242,9 @@
  @app.get('/api/servers/{server_id}/socks5/credentials', tags=["Protocols"])
  def api_socks5_get_credentials(request: Request, server_id: int, protocol: str = 'socks5'):
      """Return the current SOCKS5 port/username/password for the panel UI."""
-@@ -6881,12 +6978,33 @@
+     if not _check_admin(request):
+@@ -6880,14 +6977,35 @@
+ def _smartroute_error(e: SmartRouteError):
      return JSONResponse({'error': e.code, 'message': str(e)}, status_code=e.status_code)
  
  
@@ -249,7 +279,9 @@
  
  
  @app.post('/api/servers/{server_id}/exit-link', tags=["Protocols"])
-@@ -8064,6 +8182,7 @@
+ @serialize_peer_lifecycle
+@@ -8063,8 +8181,9 @@
+     'telemt': 'telemt',
      'dns': 'amnezia-dns',
      'wireguard': 'amnezia-wireguard',
      'socks5': 'amnezia-socks5proxy',
@@ -257,7 +289,9 @@
      'adguard': 'amnezia-adguard',
      'nginx': 'amnezia-nginx',
  }
-@@ -8677,7 +8796,7 @@
+ 
+@@ -8676,9 +8795,9 @@
+ # Public ports are published on the box itself: UDP for the WireGuard family,
  # TCP for the rest. DNS resolvers and the exit node have nothing to publish.
  PUBLIC_FORWARD_L4 = {
      'udp': ('awg', 'awg2', 'awg3', 'awg_legacy', 'wireguard'),
@@ -266,48 +300,65 @@
  }
  
  # Seconds before the startup re-apply touches SSH, so the panel is serving
-@@ -10104,11 +10223,36 @@
+ # first. Patched to 0 in tests.
+@@ -10102,13 +10221,30 @@
+         ssh = await asyncio.to_thread(get_ssh, server)
+         await asyncio.to_thread(ssh.connect)
          manager = get_protocol_manager(ssh, req.protocol)
          
++        config_available = True
          if req.client_id:
 -            # Use existing client
-+            # Link an existing peer. Native Amnezia clients keep their private
-+            # key on the user's device, so the server cannot reconstruct their
-+            # .conf. Linking only needs the public peer identity; do not make
-+            # ownership depend on possession of the client's private key.
++            # Existing native Amnezia peers have no private key on the server.
              target_client_id = req.client_id
 -            # Retrieve config for existing client
 -            config = await asyncio.to_thread(_manager_call, manager, 'get_client_config', req.protocol, req.client_id, pub_host, port, public_port=pub_port)
--            result = {'client_id': target_client_id, 'config': config}
-+            if protocol_base(req.protocol) in ('awg', 'awg2', 'awg3', 'awg_legacy'):
-+                clients = await asyncio.to_thread(
-+                    _manager_call, manager, 'get_clients', req.protocol)
-+                peer = next((item for item in clients
-+                             if item.get('clientId') == target_client_id), None)
-+                if peer is None:
-+                    raise RuntimeError('AWG client not found on the selected server')
-+                user_data = peer.get('userData') or {}
-+                if not user_data.get('clientPrivateKey') and not user_data.get('customConfig'):
-+                    # The client is visible and linkable, but its config cannot
-+                    # be reissued by the panel. The user retains the config on
-+                    # their device; config download remains unavailable.
-+                    result = {'client_id': target_client_id}
-+                else:
-+                    config = await asyncio.to_thread(
-+                        _manager_call, manager, 'get_client_config',
-+                        req.protocol, target_client_id, pub_host, port,
-+                        public_port=pub_port)
-+                    result = {'client_id': target_client_id, 'config': config}
-+            else:
++            try:
 +                config = await asyncio.to_thread(
-+                    _manager_call, manager, 'get_client_config',
-+                    req.protocol, target_client_id, pub_host, port,
-+                    public_port=pub_port)
-+                result = {'client_id': target_client_id, 'config': config}
++                    _manager_call, manager, 'get_client_config', req.protocol,
++                    req.client_id, pub_host, port, public_port=pub_port)
++            except RuntimeError as config_error:
++                missing_key = 'Client private key not stored. Config cannot be reconstructed.'
++                is_awg = protocol_base(req.protocol) in ('awg', 'awg2', 'awg3', 'awg_legacy')
++                if not is_awg or str(config_error) != missing_key:
++                    raise
++                clients = await asyncio.to_thread(_manager_call, manager, 'get_clients', req.protocol)
++                peer = next((item for item in clients if item.get('clientId') == req.client_id), None)
++                if not peer:
++                    raise
++                peer_data = peer.get('userData') or {}
++                if peer_data.get('clientPrivateKey') or peer_data.get('customConfig'):
++                    raise
++                config = None
++                config_available = False
+             result = {'client_id': target_client_id, 'config': config}
          else:
              # Create new client
              if protocol_base(req.protocol) == 'telemt':
-@@ -10829,7 +10973,11 @@
+@@ -10134,14 +10270,20 @@
+                 'protocol': req.protocol,
+                 'client_id': result['client_id'],
+                 'name': req.name,
+                 'created_at': datetime.now().isoformat(),
++                'config_available': config_available,
++                'external_client': not config_available,
+             }
+             data = load_data()
+             data['user_connections'].append(conn)
+             save_data(data)
+ 
+-        resp = {'status': 'success'}
++        resp = {'status': 'success', 'config_available': config_available}
++        if not config_available:
++            resp['warning'] = (
++                'Peer linked, but its private key is not stored on the server. '
++                'Import the original client config to make it available in the panel.')
+         if result.get('config'):
+             resp['config'] = result['config']
+             resp.update(config_payloads(result['config'], server, req.protocol))
+         return resp
+@@ -10828,9 +10970,13 @@
+         return JSONResponse({'error': 'Selected SSH jump host is no longer available'},
                              status_code=400)
      previous_jump_uid = ((settings.get('ssh_jump') or {}).get('jump_host_uid') or '')
      settings['ssh_jump'] = {'jump_host_uid': jump_host_uid}
@@ -319,7 +370,9 @@
      settings['ssl'] = payload.ssl.dict()
      settings['mail'] = merge_mail_settings(settings.get('mail'), payload.mail.dict())
  
-@@ -10913,7 +11061,7 @@
+     # Panel access control: validate the list before storing anything, so a
+@@ -10912,9 +11058,9 @@
+     tg_cfg = payload.telegram
      if tg_cfg.enabled and tg_cfg.token:
          if not tg_bot.is_running():
              logger.info("Starting Telegram bot (settings save)...")
@@ -328,7 +381,9 @@
      else:
          if tg_bot.is_running():
              logger.info("Stopping Telegram bot (settings save)...")
-@@ -11097,7 +11245,7 @@
+             asyncio.create_task(tg_bot.stop_bot())
+@@ -11096,9 +11242,9 @@
+         data['settings']['telegram'] = tg_cfg
          save_data(data)
          return {'status': 'stopped', 'bot_running': False}
      else:
@@ -337,3 +392,4 @@
          tg_cfg['enabled'] = True
          data['settings']['telegram'] = tg_cfg
          save_data(data)
+         return {'status': 'started', 'bot_running': True}
