@@ -1,6 +1,6 @@
 --- a/telegram_bot.py
 +++ b/telegram_bot.py
-@@ -785,10 +785,10 @@ def is_running() -> bool:
+@@ -785,10 +785,10 @@
      return _bot_task is not None and not _bot_task.done()
  
  
@@ -13,7 +13,7 @@
          name="telegram_bot",
      )
      return _bot_task
-@@ -2232,11 +2232,12 @@ async def _user_create_connection(api: TelegramAPI, chat_id: int, panel_user: di
+@@ -2232,11 +2232,12 @@
  # ----------------------------------------------------------------------- #
  #  Main polling loop and dispatcher
  # ----------------------------------------------------------------------- #
