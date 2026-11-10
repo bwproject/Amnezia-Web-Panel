@@ -1,3 +1,5 @@
+--- a/smartroute_service.py
++++ b/smartroute_service.py
 @@ -12,6 +12,8 @@
  import asyncio
  import logging
