@@ -1673,6 +1673,7 @@ def protocol_short_name(protocol: str, header_protection=False, protocol_version
         'xray': 'Xray',
         'telemt': 'Telemt',
         'socks5': 'SOCKS5',
+        'http_proxy': 'HTTP',
         'dns': 'DNS',
         'adguard': 'AdGuard',
         'nginx': 'NGINX',
@@ -6810,6 +6811,8 @@ def api_http_proxy_update_credentials(request: Request, server_id: int, req: Htt
             })
             save_data(data)
         return result
+    except ValueError as e:
+        return JSONResponse({'error': str(e)}, status_code=400)
     except Exception as e:
         logger.exception("Error updating HTTP proxy credentials")
         return JSONResponse({'error': str(e)}, status_code=500)
@@ -8786,7 +8789,7 @@ async def api_set_protocol_public_endpoint(request: Request, server_id: int, req
 # TCP for the rest. DNS resolvers and the exit node have nothing to publish.
 PUBLIC_FORWARD_L4 = {
     'udp': ('awg', 'awg2', 'awg3', 'awg_legacy', 'wireguard'),
-    'tcp': ('xray', 'telemt', 'socks5', 'nginx'),
+    'tcp': ('xray', 'telemt', 'socks5', 'http_proxy', 'nginx'),
 }
 
 # Seconds before the startup re-apply touches SSH, so the panel is serving
