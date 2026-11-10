@@ -12,7 +12,7 @@
  
  from exit_link_service import ExitLinkError, ExitLinkService
  from smartroute_service import SmartRouteError, SmartRouteService, split_instances
-@@ -1390,7 +1393,7 @@ async def wait_for_tunnel_url(provider: str, seconds: int = 20):
+@@ -1390,7 +1393,7 @@
      return get_tunnel_status(provider)
  
  
@@ -21,7 +21,7 @@
  MULTI_INSTANCE_PROTOCOLS = {'awg', 'awg2', 'awg3', 'awg_legacy', 'xray', 'telemt', 'socks5'}
  
  
-@@ -1472,6 +1475,7 @@ def protocol_container_name(protocol: str) -> Optional[str]:
+@@ -1472,6 +1475,7 @@
          'dns': 'amnezia-dns',
          'wireguard': 'amnezia-wireguard',
          'socks5': 'amnezia-socks5proxy',
@@ -29,7 +29,7 @@
          'adguard': 'amnezia-adguard',
          'nginx': 'amnezia-nginx',
          'exit': 'amnezia-exit',
-@@ -1503,6 +1507,9 @@ def get_protocol_manager(ssh, protocol: str):
+@@ -1503,6 +1507,9 @@
      elif base == 'socks5':
          from managers.socks5_manager import Socks5Manager
          return Socks5Manager(ssh, protocol)
@@ -39,7 +39,7 @@
      elif base == 'adguard':
          from managers.adguard_manager import AdguardManager
          return AdguardManager(ssh)
-@@ -1666,6 +1673,7 @@ def protocol_short_name(protocol: str, header_protection=False, protocol_version
+@@ -1666,6 +1673,7 @@
          'xray': 'Xray',
          'telemt': 'Telemt',
          'socks5': 'SOCKS5',
@@ -47,7 +47,7 @@
          'dns': 'DNS',
          'adguard': 'AdGuard',
          'nginx': 'NGINX',
-@@ -2039,8 +2047,8 @@ def _mail_error_response(exc: MailError, lang: str):
+@@ -2039,8 +2047,8 @@
  
  
  def _exit_manager_factory(ssh):
@@ -58,7 +58,7 @@
  
  
  exit_link_svc = ExitLinkService(
-@@ -2049,6 +2057,7 @@ def _exit_manager_factory(ssh):
+@@ -2049,6 +2057,7 @@
      data_lock=DATA_LOCK,
      get_ssh=get_ssh,
      awg_manager_factory=lambda ssh: AWGManager(ssh),
@@ -66,7 +66,7 @@
      exit_manager_factory=_exit_manager_factory,
      protocol_base=protocol_base,
      awg_protocols=AWG_PROTOCOLS,
-@@ -2681,6 +2690,9 @@ class InstallProtocolRequest(BaseModel):
+@@ -2681,6 +2690,9 @@
      # SOCKS5
      socks5_username: Optional[str] = None
      socks5_password: Optional[str] = None
@@ -76,7 +76,7 @@
      # AdGuard Home
      adguard_mode: Optional[str] = None  # 'replace' or 'sidebyside'
      adguard_web_port: Optional[int] = None
-@@ -2800,6 +2812,13 @@ class Socks5SettingsRequest(BaseModel):
+@@ -2800,6 +2812,13 @@
      password: Optional[str] = None
  
  
@@ -90,7 +90,7 @@
  class ProtocolRequest(BaseModel):
      protocol: str = 'awg'
  
-@@ -2989,6 +3008,7 @@ class DuckDNSApplyRequest(BaseModel):
+@@ -2989,6 +3008,7 @@
  class TelegramSettings(BaseModel):
      token: str = ''
      enabled: bool = False
@@ -98,7 +98,7 @@
  
  
  class MailSettings(BaseModel):
-@@ -3291,7 +3311,7 @@ async def startup():
+@@ -3291,7 +3311,7 @@
      tg_cfg = data.get('settings', {}).get('telegram', {})
      if tg_cfg.get('enabled') and tg_cfg.get('token'):
          logger.info("Starting Telegram bot from saved settings...")
@@ -107,7 +107,7 @@
  
  
  def _auto_backup_due(auto_backup: dict, now: Optional[datetime] = None) -> bool:
-@@ -6119,7 +6139,7 @@ def get_used_ports(ssh):
+@@ -6119,7 +6139,7 @@
  INSTALL_PORT_TRANSPORT = {
      'awg': 'udp', 'awg2': 'udp', 'awg3': 'udp', 'awg_legacy': 'udp',
      'wireguard': 'udp', 'exit': 'udp',
@@ -116,7 +116,7 @@
  }
  
  
-@@ -6571,6 +6591,14 @@ async def api_install_protocol(request: Request, server_id: int, req: InstallPro
+@@ -6571,6 +6591,14 @@
                  username=req.socks5_username,
                  password=req.socks5_password,
              )
@@ -131,7 +131,7 @@
          elif install_base == 'adguard':
              install_args = ()
              install_kwargs = dict(
-@@ -6645,6 +6673,8 @@ async def api_install_protocol(request: Request, server_id: int, req: InstallPro
+@@ -6645,6 +6673,8 @@
              proto_record['mtu'] = result['mtu']
          if result.get('dns'):
              proto_record['dns'] = result['dns']
@@ -140,7 +140,7 @@
          if install_base == 'adguard':
              proto_record['mode'] = result.get('mode')
              proto_record['internal_ip'] = result.get('internal_ip')
-@@ -6731,6 +6761,73 @@ async def api_install_protocol(request: Request, server_id: int, req: InstallPro
+@@ -6731,6 +6761,73 @@
          return JSONResponse({'error': str(e)}, status_code=500)
  
  
@@ -214,7 +214,7 @@
  @app.get('/api/servers/{server_id}/socks5/credentials', tags=["Protocols"])
  def api_socks5_get_credentials(request: Request, server_id: int, protocol: str = 'socks5'):
      """Return the current SOCKS5 port/username/password for the panel UI."""
-@@ -6881,12 +6978,33 @@ def _smartroute_error(e: SmartRouteError):
+@@ -6881,12 +6978,33 @@
      return JSONResponse({'error': e.code, 'message': str(e)}, status_code=e.status_code)
  
  
@@ -249,7 +249,7 @@
  
  
  @app.post('/api/servers/{server_id}/exit-link', tags=["Protocols"])
-@@ -8064,6 +8182,7 @@ async def api_uninstall_protocol(request: Request, server_id: int, req: Protocol
+@@ -8064,6 +8182,7 @@
      'dns': 'amnezia-dns',
      'wireguard': 'amnezia-wireguard',
      'socks5': 'amnezia-socks5proxy',
@@ -257,7 +257,7 @@
      'adguard': 'amnezia-adguard',
      'nginx': 'amnezia-nginx',
  }
-@@ -8677,7 +8796,7 @@ async def api_set_protocol_public_endpoint(request: Request, server_id: int, req
+@@ -8677,7 +8796,7 @@
  # TCP for the rest. DNS resolvers and the exit node have nothing to publish.
  PUBLIC_FORWARD_L4 = {
      'udp': ('awg', 'awg2', 'awg3', 'awg_legacy', 'wireguard'),
@@ -266,7 +266,7 @@
  }
  
  # Seconds before the startup re-apply touches SSH, so the panel is serving
-@@ -10829,7 +10948,11 @@ def save_settings(request: Request, payload: SaveSettingsRequest):
+@@ -10829,7 +10948,11 @@
                              status_code=400)
      previous_jump_uid = ((settings.get('ssh_jump') or {}).get('jump_host_uid') or '')
      settings['ssh_jump'] = {'jump_host_uid': jump_host_uid}
@@ -278,7 +278,7 @@
      settings['ssl'] = payload.ssl.dict()
      settings['mail'] = merge_mail_settings(settings.get('mail'), payload.mail.dict())
  
-@@ -10913,7 +11036,7 @@ def save_settings(request: Request, payload: SaveSettingsRequest):
+@@ -10913,7 +11036,7 @@
      if tg_cfg.enabled and tg_cfg.token:
          if not tg_bot.is_running():
              logger.info("Starting Telegram bot (settings save)...")
@@ -287,7 +287,7 @@
      else:
          if tg_bot.is_running():
              logger.info("Stopping Telegram bot (settings save)...")
-@@ -11097,7 +11220,7 @@ async def api_telegram_toggle(request: Request):
+@@ -11097,7 +11220,7 @@
          save_data(data)
          return {'status': 'stopped', 'bot_running': False}
      else:
