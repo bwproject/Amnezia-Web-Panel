@@ -104,7 +104,7 @@ class HttpProxyManager:
         if code != 0 or not out.strip():
             return False
         status, _, _ = self.ssh.run_command('systemctl is-active docker 2>/dev/null')
-        return 'active' in status.lower()
+        return status.strip().lower() == 'active'
 
     def check_protocol_installed(self, protocol_type='http_proxy'):
         name = self._container_name(protocol_type)
