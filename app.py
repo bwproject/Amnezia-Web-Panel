@@ -1393,7 +1393,7 @@ async def wait_for_tunnel_url(provider: str, seconds: int = 20):
     return get_tunnel_status(provider)
 
 
-BASE_PROTOCOLS = ['awg', 'awg2', 'awg3', 'awg_legacy', 'xray', 'telemt', 'dns', 'wireguard', 'socks5', 'adguard', 'nginx', 'exit']
+BASE_PROTOCOLS = ['awg', 'awg2', 'awg3', 'awg_legacy', 'xray', 'telemt', 'dns', 'wireguard', 'socks5', 'http_proxy', 'adguard', 'nginx', 'exit']
 MULTI_INSTANCE_PROTOCOLS = {'awg', 'awg2', 'awg3', 'awg_legacy', 'xray', 'telemt', 'socks5'}
 
 
@@ -1475,6 +1475,7 @@ def protocol_container_name(protocol: str) -> Optional[str]:
         'dns': 'amnezia-dns',
         'wireguard': 'amnezia-wireguard',
         'socks5': 'amnezia-socks5proxy',
+        'http_proxy': 'http-proxy',
         'adguard': 'amnezia-adguard',
         'nginx': 'amnezia-nginx',
         'exit': 'amnezia-exit',
@@ -1506,6 +1507,9 @@ def get_protocol_manager(ssh, protocol: str):
     elif base == 'socks5':
         from managers.socks5_manager import Socks5Manager
         return Socks5Manager(ssh, protocol)
+    elif base == 'http_proxy':
+        from managers.http_proxy_manager import HttpProxyManager
+        return HttpProxyManager(ssh, protocol)
     elif base == 'adguard':
         from managers.adguard_manager import AdguardManager
         return AdguardManager(ssh)
@@ -2685,6 +2689,9 @@ class InstallProtocolRequest(BaseModel):
     # SOCKS5
     socks5_username: Optional[str] = None
     socks5_password: Optional[str] = None
+    # HTTP proxy (3proxy)
+    http_proxy_username: Optional[str] = None
+    http_proxy_password: Optional[str] = None
     # AdGuard Home
     adguard_mode: Optional[str] = None  # 'replace' or 'sidebyside'
     adguard_web_port: Optional[int] = None
@@ -2799,6 +2806,13 @@ class SmartRouteDnsServersRequest(BaseModel):
 
 class Socks5SettingsRequest(BaseModel):
     protocol: str = 'socks5'
+    port: Optional[int] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+
+
+class HttpProxySettingsRequest(BaseModel):
+    protocol: str = 'http_proxy'
     port: Optional[int] = None
     username: Optional[str] = None
     password: Optional[str] = None
@@ -6124,7 +6138,7 @@ def get_used_ports(ssh):
 INSTALL_PORT_TRANSPORT = {
     'awg': 'udp', 'awg2': 'udp', 'awg3': 'udp', 'awg_legacy': 'udp',
     'wireguard': 'udp', 'exit': 'udp',
-    'xray': 'tcp', 'telemt': 'tcp', 'socks5': 'tcp', 'nginx': 'tcp',
+    'xray': 'tcp', 'telemt': 'tcp', 'socks5': 'tcp', 'http_proxy': 'tcp', 'nginx': 'tcp',
 }
 
 
@@ -6576,6 +6590,14 @@ async def api_install_protocol(request: Request, server_id: int, req: InstallPro
                 username=req.socks5_username,
                 password=req.socks5_password,
             )
+        elif install_base == 'http_proxy':
+            install_args = ()
+            install_kwargs = dict(
+                protocol_type=install_protocol,
+                port=req.port,
+                username=req.http_proxy_username,
+                password=req.http_proxy_password,
+            )
         elif install_base == 'adguard':
             install_args = ()
             install_kwargs = dict(
@@ -6650,6 +6672,8 @@ async def api_install_protocol(request: Request, server_id: int, req: InstallPro
             proto_record['mtu'] = result['mtu']
         if result.get('dns'):
             proto_record['dns'] = result['dns']
+        if install_base == 'http_proxy':
+            proto_record['username'] = result.get('username')
         if install_base == 'adguard':
             proto_record['mode'] = result.get('mode')
             proto_record['internal_ip'] = result.get('internal_ip')
@@ -6734,6 +6758,64 @@ async def api_install_protocol(request: Request, server_id: int, req: InstallPro
             op_log(op, 'error', f"internal error: {e}")
             op_finish(op, 'failed', error={'code': 'internal_error', 'message': str(e)})
         return JSONResponse({'error': str(e)}, status_code=500)
+
+
+@app.get('/api/servers/{server_id}/http-proxy/credentials', tags=["Protocols"])
+def api_http_proxy_get_credentials(request: Request, server_id: int, protocol: str = 'http_proxy'):
+    """Return the current HTTP proxy port and Basic Auth credentials."""
+    if not _check_admin(request):
+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
+    ssh = None
+    try:
+        data = load_data()
+        if server_id < 0 or server_id >= len(data['servers']):
+            return JSONResponse({'error': 'Server not found'}, status_code=404)
+        if not is_valid_protocol(protocol) or protocol_base(protocol) != 'http_proxy':
+            protocol = 'http_proxy'
+        ssh = get_ssh(data['servers'][server_id])
+        ssh.connect()
+        creds = get_protocol_manager(ssh, protocol).get_credentials()
+        return {'status': 'success', **creds}
+    except Exception as e:
+        logger.exception("Error reading HTTP proxy credentials")
+        return JSONResponse({'error': str(e)}, status_code=500)
+    finally:
+        if ssh:
+            ssh.disconnect()
+
+
+@app.post('/api/servers/{server_id}/http-proxy/credentials', tags=["Protocols"])
+def api_http_proxy_update_credentials(request: Request, server_id: int, req: HttpProxySettingsRequest):
+    """Update the HTTP proxy config and recreate the container if its port changes."""
+    if not _check_admin(request):
+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
+    ssh = None
+    try:
+        data = load_data()
+        if server_id < 0 or server_id >= len(data['servers']):
+            return JSONResponse({'error': 'Server not found'}, status_code=404)
+        server = data['servers'][server_id]
+        protocol = req.protocol if is_valid_protocol(req.protocol) and protocol_base(req.protocol) == 'http_proxy' else 'http_proxy'
+        ssh = get_ssh(server)
+        ssh.connect()
+        result = get_protocol_manager(ssh, protocol).update_credentials(
+            port=req.port, username=req.username, password=req.password)
+        if result.get('status') == 'success':
+            record = server.setdefault('protocols', {}).setdefault(protocol, {})
+            record.update({
+                'installed': True, 'port': str(result.get('port')),
+                'username': result.get('username'), 'base_protocol': 'http_proxy',
+                'instance': protocol_instance(protocol), 'display_name': protocol_display_name(protocol),
+                'container_name': protocol_container_name(protocol),
+            })
+            save_data(data)
+        return result
+    except Exception as e:
+        logger.exception("Error updating HTTP proxy credentials")
+        return JSONResponse({'error': str(e)}, status_code=500)
+    finally:
+        if ssh:
+            ssh.disconnect()
 
 
 @app.get('/api/servers/{server_id}/socks5/credentials', tags=["Protocols"])
