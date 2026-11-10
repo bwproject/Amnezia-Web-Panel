@@ -6799,7 +6799,14 @@ def api_http_proxy_update_credentials(request: Request, server_id: int, req: Htt
         protocol = req.protocol if is_valid_protocol(req.protocol) and protocol_base(req.protocol) == 'http_proxy' else 'http_proxy'
         ssh = get_ssh(server)
         ssh.connect()
-        result = get_protocol_manager(ssh, protocol).update_credentials(
+        manager = get_protocol_manager(ssh, protocol)
+        current = manager.get_credentials()
+        if req.port is not None and current.get('port') and int(req.port) != int(current['port']):
+            used = get_used_ports(ssh)
+            owner = used.get('tcp', {}).get(str(req.port))
+            if owner:
+                return JSONResponse({'error': f'Port {req.port}/TCP is already used by {owner}. Choose another port.'}, status_code=400)
+        result = manager.update_credentials(
             port=req.port, username=req.username, password=req.password)
         if result.get('status') == 'success':
             record = server.setdefault('protocols', {}).setdefault(protocol, {})
