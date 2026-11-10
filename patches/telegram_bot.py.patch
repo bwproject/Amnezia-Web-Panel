@@ -1,0 +1,28 @@
+@@ -785,10 +785,10 @@ def is_running() -> bool:
+     return _bot_task is not None and not _bot_task.done()
+ 
+ 
+-def launch_bot(token: str, load_data_fn: Callable, generate_vpn_link_fn: Callable, save_data_fn: Optional[Callable] = None, self_service_svc=None):
++def launch_bot(token: str, load_data_fn: Callable, generate_vpn_link_fn: Callable, save_data_fn: Optional[Callable] = None, self_service_svc=None, http_client_factory=None):
+     global _bot_task
+     _bot_task = asyncio.create_task(
+-        _run_bot(token, load_data_fn, generate_vpn_link_fn, save_data_fn, self_service_svc),
++        _run_bot(token, load_data_fn, generate_vpn_link_fn, save_data_fn, self_service_svc, http_client_factory),
+         name="telegram_bot",
+     )
+     return _bot_task
+@@ -2232,11 +2232,12 @@ async def _user_create_connection(api: TelegramAPI, chat_id: int, panel_user: di
+ # ----------------------------------------------------------------------- #
+ #  Main polling loop and dispatcher
+ # ----------------------------------------------------------------------- #
+-async def _run_bot(token: str, load_data_fn: Callable, generate_vpn_link_fn: Callable, save_data_fn: Optional[Callable] = None, self_service_svc=None):
++async def _run_bot(token: str, load_data_fn: Callable, generate_vpn_link_fn: Callable, save_data_fn: Optional[Callable] = None, self_service_svc=None, http_client_factory=None):
+     offset = 0
+     logger.info("Telegram bot started (raw httpx polling).")
+ 
+-    async with httpx.AsyncClient() as client:
++    client_factory = http_client_factory or httpx.AsyncClient
++    async with client_factory() as client:
+         api = TelegramAPI(token, client)
+ 
+         me = await api.call("getMe")
