@@ -1,3 +1,5 @@
+--- a/telegram_bot.py
++++ b/telegram_bot.py
 @@ -785,10 +785,10 @@ def is_running() -> bool:
      return _bot_task is not None and not _bot_task.done()
  
