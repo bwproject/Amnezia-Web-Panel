@@ -266,7 +266,48 @@
  }
  
  # Seconds before the startup re-apply touches SSH, so the panel is serving
-@@ -10829,7 +10948,11 @@
+@@ -10104,11 +10223,36 @@
+         manager = get_protocol_manager(ssh, req.protocol)
+         
+         if req.client_id:
+-            # Use existing client
++            # Link an existing peer. Native Amnezia clients keep their private
++            # key on the user's device, so the server cannot reconstruct their
++            # .conf. Linking only needs the public peer identity; do not make
++            # ownership depend on possession of the client's private key.
+             target_client_id = req.client_id
+-            # Retrieve config for existing client
+-            config = await asyncio.to_thread(_manager_call, manager, 'get_client_config', req.protocol, req.client_id, pub_host, port, public_port=pub_port)
+-            result = {'client_id': target_client_id, 'config': config}
++            if protocol_base(req.protocol) in ('awg', 'awg2', 'awg3', 'awg_legacy'):
++                clients = await asyncio.to_thread(
++                    _manager_call, manager, 'get_clients', req.protocol)
++                peer = next((item for item in clients
++                             if item.get('clientId') == target_client_id), None)
++                if peer is None:
++                    raise RuntimeError('AWG client not found on the selected server')
++                user_data = peer.get('userData') or {}
++                if not user_data.get('clientPrivateKey') and not user_data.get('customConfig'):
++                    # The client is visible and linkable, but its config cannot
++                    # be reissued by the panel. The user retains the config on
++                    # their device; config download remains unavailable.
++                    result = {'client_id': target_client_id}
++                else:
++                    config = await asyncio.to_thread(
++                        _manager_call, manager, 'get_client_config',
++                        req.protocol, target_client_id, pub_host, port,
++                        public_port=pub_port)
++                    result = {'client_id': target_client_id, 'config': config}
++            else:
++                config = await asyncio.to_thread(
++                    _manager_call, manager, 'get_client_config',
++                    req.protocol, target_client_id, pub_host, port,
++                    public_port=pub_port)
++                result = {'client_id': target_client_id, 'config': config}
+         else:
+             # Create new client
+             if protocol_base(req.protocol) == 'telemt':
+@@ -10829,7 +10973,11 @@
                              status_code=400)
      previous_jump_uid = ((settings.get('ssh_jump') or {}).get('jump_host_uid') or '')
      settings['ssh_jump'] = {'jump_host_uid': jump_host_uid}
@@ -278,7 +319,7 @@
      settings['ssl'] = payload.ssl.dict()
      settings['mail'] = merge_mail_settings(settings.get('mail'), payload.mail.dict())
  
-@@ -10913,7 +11036,7 @@
+@@ -10913,7 +11061,7 @@
      if tg_cfg.enabled and tg_cfg.token:
          if not tg_bot.is_running():
              logger.info("Starting Telegram bot (settings save)...")
@@ -287,7 +328,7 @@
      else:
          if tg_bot.is_running():
              logger.info("Stopping Telegram bot (settings save)...")
-@@ -11097,7 +11220,7 @@
+@@ -11097,7 +11245,7 @@
          save_data(data)
          return {'status': 'stopped', 'bot_running': False}
      else:
