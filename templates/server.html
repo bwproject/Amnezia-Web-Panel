@@ -2738,7 +2738,7 @@
         { proto: 'dns', category: 'services', icon: '🔍', title: 'AmneziaDNS', descKey: 'dns_desc' },
         { proto: 'adguard', category: 'services', icon: '🛡️', title: 'AdGuard Home', descKey: 'adguard_desc' },
         { proto: 'socks5', category: 'services', icon: '🧦', title: 'SOCKS5 Proxy', descKey: 'socks5_desc' },
-        { proto: 'http_proxy', category: 'services', icon: '🌐', title: 'HTTP Proxy (3proxy)', descKey: 'socks5_desc' },
+        { proto: 'http_proxy', category: 'services', icon: '🌐', title: 'HTTP Proxy (3proxy)', desc: 'Standard HTTP proxy with Basic authentication on a configurable TCP port.' },
         { proto: 'exit', category: 'services', icon: '🚪', title: 'Exit Node', descKey: 'exit_desc', badge: 'NEW' },
         { proto: 'smartroute', category: 'services', icon: '🧭', title: 'Smart Route', descKey: 'smartroute_desc', badge: 'NEW' },
         { proto: 'warp', category: 'services', icon: '☁️', title: 'Cloudflare WARP', descKey: 'srv_warp_card_desc' },
@@ -2991,7 +2991,7 @@
                                             </div>
                                         </div>
                                     </div>
-                                    <div class="marketplace-app-desc">${_(app.descKey)}</div>
+                                    <div class="marketplace-app-desc">${app.desc || _(app.descKey)}</div>
                                     <button class="btn ${installed && !canInstallAnother ? 'btn-secondary' : 'btn-primary'} btn-sm" ${action}>
                                         ${isSmart ? _('smartroute_open') : (canInstallAnother ? _('install_another') : (installed ? _('installed') : _('install')))}
                                     </button>
