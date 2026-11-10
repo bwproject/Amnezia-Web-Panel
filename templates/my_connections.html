@@ -226,11 +226,11 @@
                     </div>
                 </div>
                 <div class="client-actions entity-card-actions">
-                <button class="btn btn-secondary btn-sm btn-icon"
-                    onclick="showMyConfig('${escapeJs(c.id)}', '${escapeJs(c.name || 'Connection')}', '${escapeJs(c.protocol)}')"
-                    title="${_('show_config')}">
-                    📄
-                </button>
+                ${c.config_available === false
+                    ? `<span class="client-meta" title="The peer private key is stored only on the original client device; the panel cannot reconstruct its config.">🔒 Config unavailable</span>`
+                    : `<button class="btn btn-secondary btn-sm btn-icon"
+                        onclick="showMyConfig('${escapeJs(c.id)}', '${escapeJs(c.name || 'Connection')}', '${escapeJs(c.protocol)}')"
+                        title="${_('show_config')}">📄</button>`}
                 ${c.created_by === 'self_service'
                     ? `<button class="btn btn-danger btn-sm btn-icon"
                         onclick="deleteConnection('${escapeJs(c.id)}', '${escapeJs(c.name || 'Connection')}')"

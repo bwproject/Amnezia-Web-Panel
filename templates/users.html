@@ -1048,20 +1048,24 @@
                 const selected = [...document.getElementById('ucExistingClient').selectedOptions]
                     .map(o => o.value).filter(Boolean);
                 if (!selected.length) throw new Error(_('select_connection'));
-                let ok = 0, failed = 0, lastErr = '';
+                let ok = 0, failed = 0, unavailableConfig = 0, lastErr = '';
                 for (const clientId of selected) {
                     try {
-                        await apiCall(`/api/users/${currentUserId}/connections/add`, 'POST', { ...body, client_id: clientId });
+                        const linked = await apiCall(`/api/users/${currentUserId}/connections/add`, 'POST', { ...body, client_id: clientId });
                         ok++;
+                        if (linked.config_available === false) unavailableConfig++;
                     } catch (e) {
                         failed++;
                         lastErr = e.message;
                     }
                 }
                 if (!ok) throw new Error(lastErr || _('error'));
+                const linkedMessage = _('conn_linked') + (ok > 1 ? ` (${ok})` : '');
                 showToast(failed
-                    ? `${_('conn_linked')}: ${ok}, ${_('error')}: ${failed} (${lastErr})`
-                    : _('conn_linked') + (ok > 1 ? ` (${ok})` : ''), failed ? 'error' : 'success');
+                    ? `${linkedMessage}, ${_('error')}: ${failed} (${lastErr})`
+                    : (unavailableConfig
+                        ? `${linkedMessage}. ${unavailableConfig} AWG peer(s) have no private key on the server; their config cannot be displayed.`
+                        : linkedMessage), failed ? 'error' : (unavailableConfig ? 'info' : 'success'));
                 closeModal('addUserConnModal');
                 refreshUsersList();
                 const connsModal = document.getElementById('userConnsModal');
@@ -1185,7 +1189,9 @@
                         </div>
                         <div class="client-actions">
                             <button class="btn btn-secondary btn-sm btn-icon" onclick="renameUserConnection(${sid}, '${escapeJs(c.client_id)}', '${escapeJs(proto)}', '${escapeJs(name)}')" title="${_('rename')}">${ICON_PENCIL}</button>
-                            <button class="btn btn-secondary btn-sm btn-icon" onclick="showUserConnectionConfig(${sid}, '${escapeJs(c.client_id)}', '${escapeJs(proto)}', '${escapeJs(name)}')" title="${_('config')}">📄</button>
+                            ${c.config_available === false
+                                ? `<span class="client-meta" title="The peer private key is stored only on the original client device; the panel cannot reconstruct its config.">🔒 Config unavailable</span>`
+                                : `<button class="btn btn-secondary btn-sm btn-icon" onclick="showUserConnectionConfig(${sid}, '${escapeJs(c.client_id)}', '${escapeJs(proto)}', '${escapeJs(name)}')" title="${_('config')}">📄</button>`}
                             <button class="btn btn-secondary btn-sm btn-icon ${toggleCls}" onclick="toggleUserConnection(${sid}, '${escapeJs(c.client_id)}', '${escapeJs(proto)}', ${!enabled}, this)" title="${toggleTitle}">💡</button>
                             <button class="btn btn-secondary btn-sm btn-icon" onclick="unlinkUserConnection(${sid}, '${escapeJs(c.client_id)}', '${escapeJs(proto)}', '${escapeJs(name)}', ${enabled})" title="${_('unlink_key_title').replace('{}', name).replace('{}', currentConnsUsername)}">✂️</button>
                             <button class="btn btn-danger btn-sm btn-icon" onclick="removeUserConnection(${sid}, '${escapeJs(c.client_id)}', '${escapeJs(proto)}', '${escapeJs(name)}', ${enabled})" title="${_('delete')}">${ICON_TRASH}</button>
