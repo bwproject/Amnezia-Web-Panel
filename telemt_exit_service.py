@@ -8,14 +8,14 @@ set -eu
 [ -r /etc/default/bw-telemt-awg-route ] || exit 0
 . /etc/default/bw-telemt-awg-route
 remove_rules() {
-  ip -4 rule del pref 121 2>/dev/null || true
+  ip -4 rule del pref 124 2>/dev/null || true
   ip -4 route flush table 203 2>/dev/null || true
   if [ -n "${TELEMT_IP:-}" ]; then
     docker exec "$AWG_CONTAINER" sh -c "
-      ip -4 rule del pref 121 2>/dev/null || true
-      iptables -D FORWARD -i eth0 -o bwexit0 -s '$TELEMT_IP/32' -j ACCEPT 2>/dev/null || true
-      iptables -D FORWARD -i bwexit0 -o eth0 -d '$TELEMT_IP/32' -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
-      iptables -t nat -D POSTROUTING -s '$TELEMT_IP/32' -o bwexit0 -j MASQUERADE 2>/dev/null || true
+      ip -4 rule del pref 124 2>/dev/null || true
+      iptables -D FORWARD -i eth0 -o exit0 -s '$TELEMT_IP/32' -j ACCEPT 2>/dev/null || true
+      iptables -D FORWARD -i exit0 -o eth0 -d '$TELEMT_IP/32' -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+      iptables -t nat -D POSTROUTING -s '$TELEMT_IP/32' -o exit0 -j MASQUERADE 2>/dev/null || true
     " >/dev/null 2>&1 || true
   fi
 }
@@ -28,19 +28,19 @@ if [ "$TELEMT_RUNNING" != true ]; then remove_rules; exit 0; fi
 HOST_DEV=$(ip route get "$AWG_IP" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
 [ -n "$HOST_DEV" ] || exit 0
 # A blackhole remains in place unless the selected AWG tunnel is ready.
-ip -4 rule del pref 121 2>/dev/null || true
+ip -4 rule del pref 124 2>/dev/null || true
 ip -4 route replace blackhole default table 203
-ip -4 rule add pref 121 from "$TELEMT_IP/32" table 203
-if ! docker exec "$AWG_CONTAINER" ip link show bwexit0 >/dev/null 2>&1; then exit 0; fi
+ip -4 rule add pref 124 from "$TELEMT_IP/32" table 203
+if ! docker exec "$AWG_CONTAINER" ip link show exit0 >/dev/null 2>&1; then exit 0; fi
 docker exec "$AWG_CONTAINER" sh -c "
-  ip -4 rule del pref 121 2>/dev/null || true
-  ip -4 rule add pref 121 from '$TELEMT_IP/32' table 200
-  ip -4 route replace default dev bwexit0 table 200
+  ip -4 rule del pref 124 2>/dev/null || true
+  ip -4 rule add pref 124 from '$TELEMT_IP/32' table 204
+  ip -4 route replace default dev exit0 table 204
   sysctl -w net.ipv4.ip_forward=1 >/dev/null
   sysctl -w net.ipv4.conf.all.rp_filter=2 >/dev/null 2>&1 || true
-  iptables -C FORWARD -i eth0 -o bwexit0 -s '$TELEMT_IP/32' -j ACCEPT 2>/dev/null || iptables -A FORWARD -i eth0 -o bwexit0 -s '$TELEMT_IP/32' -j ACCEPT
-  iptables -C FORWARD -i bwexit0 -o eth0 -d '$TELEMT_IP/32' -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -i bwexit0 -o eth0 -d '$TELEMT_IP/32' -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-  iptables -t nat -C POSTROUTING -s '$TELEMT_IP/32' -o bwexit0 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s '$TELEMT_IP/32' -o bwexit0 -j MASQUERADE
+  iptables -C FORWARD -i eth0 -o exit0 -s '$TELEMT_IP/32' -j ACCEPT 2>/dev/null || iptables -A FORWARD -i eth0 -o exit0 -s '$TELEMT_IP/32' -j ACCEPT
+  iptables -C FORWARD -i exit0 -o eth0 -d '$TELEMT_IP/32' -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -i exit0 -o eth0 -d '$TELEMT_IP/32' -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+  iptables -t nat -C POSTROUTING -s '$TELEMT_IP/32' -o exit0 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s '$TELEMT_IP/32' -o exit0 -j MASQUERADE
 " || exit 1
 ip -4 route replace default via "$AWG_IP" dev "$HOST_DEV" table 203
 """
@@ -128,6 +128,7 @@ class TelemtExitService:
             telemt_container = self._telemt_container(telemt_protocol)
             awg_container = awg._container_name(awg_protocol)
             self._run(ssh, f"docker network connect bridge {shlex.quote(telemt_container)} >/dev/null 2>&1 || true")
+            self._run(ssh, f"docker network connect bridge {shlex.quote(awg_container)} >/dev/null 2>&1 || true")
             self._run(ssh, f"docker inspect {shlex.quote(telemt_container)} >/dev/null")
             self._run(ssh, f"docker inspect {shlex.quote(awg_container)} >/dev/null")
             telemt_ip = self._run(
