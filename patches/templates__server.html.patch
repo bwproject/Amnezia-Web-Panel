@@ -83,7 +83,7 @@
  <!-- ===== SOCKS5 Settings Modal ===== -->
  <div class="modal-backdrop" id="socks5SettingsModal">
      <div class="modal">
-@@ -2676,6 +2738,7 @@
+@@ -2676,6 +2738,8 @@
          { proto: 'dns', category: 'services', icon: '🔍', title: 'AmneziaDNS', descKey: 'dns_desc' },
          { proto: 'adguard', category: 'services', icon: '🛡️', title: 'AdGuard Home', descKey: 'adguard_desc' },
          { proto: 'socks5', category: 'services', icon: '🧦', title: 'SOCKS5 Proxy', descKey: 'socks5_desc' },
