@@ -281,7 +281,7 @@
 +                        ${telemtExitBtn}
                          ${exitBtn}
                          ${endpointBtn}
-@@ -5202,1 +5309,71 @@ -5199,7 +5228,77 @@
+@@ -5202,1 +5309,71 @@ -5199,4 +5228,74 @@
              spinner.classList.add('hidden');
          }
      }
