@@ -243,7 +243,7 @@
  def api_socks5_get_credentials(request: Request, server_id: int, protocol: str = 'socks5'):
      """Return the current SOCKS5 port/username/password for the panel UI."""
      if not _check_admin(request):
-@@ -6970,14 +6970,112 @@
+@@ -6970,14 +6970,111 @@
  def _smartroute_error(e: SmartRouteError):
      return JSONResponse({'error': e.code, 'message': str(e)}, status_code=e.status_code)
  
