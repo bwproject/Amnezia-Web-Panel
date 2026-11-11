@@ -286,7 +286,7 @@
 +                        ${telemtExitBtn}
                          ${exitBtn}
                          ${endpointBtn}
-@@ -5202,2 +5231,72 @@
+@@ -5201,2 +5230,72 @@
  
 +    // ========== Telemt Exit Node routing ==========
 +    async function openTelemtExitModal(proto = 'telemt') {
