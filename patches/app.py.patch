@@ -403,7 +403,7 @@
  from warp_service import (
 --- a/app.py
 +++ b/app.py
-@@ -6888,4 +6888,79 @@
+@@ -6888,4 +6888,80 @@
      return {'status': 'success', 'exit_nodes': exit_link_svc.list_exit_nodes(load_data())}
  
 +
@@ -482,6 +482,5 @@
 +    except Exception as e:
 +        logger.exception("Error unlinking Telemt from AWG Exit Node")
 +        return JSONResponse({'error': str(e)}, status_code=400)
- 
  
  @app.post('/api/servers/{server_id}/exit-link', tags=["Protocols"])
