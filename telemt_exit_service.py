@@ -19,11 +19,11 @@ remove_rules() {
     " >/dev/null 2>&1 || true
   fi
 }
-if [ "\${ENABLED:-0}" != 1 ]; then remove_rules; exit 0; fi
-docker network connect bridge "$TELEMT_CONTAINER" >/dev/null 2>&1 || true
-docker network connect bridge "$AWG_CONTAINER" >/dev/null 2>&1 || true
-TELEMT_IP=$(docker inspect -f '{{(index .NetworkSettings.Networks "bridge").IPAddress}}' "$TELEMT_CONTAINER" 2>/dev/null || true)
+TELEMT_IP=$(docker inspect -f '{{(index .NetworkSettings.Networks "bridge").IPAddress}}' "$TELEMT_CONTAINER" 2>/dev/null || echo "${TELEMT_IP_SAVED:-}")
 AWG_IP=$(docker inspect -f '{{(index .NetworkSettings.Networks "bridge").IPAddress}}' "$AWG_CONTAINER" 2>/dev/null || true)
+if [ "${ENABLED:-0}" != 1 ]; then remove_rules; exit 0; fi
+TELEMT_RUNNING=$(docker inspect -f '{{.State.Running}}' "$TELEMT_CONTAINER" 2>/dev/null || echo false)
+if [ "$TELEMT_RUNNING" != true ]; then remove_rules; exit 0; fi
 [ -n "$TELEMT_IP" ] && [ -n "$AWG_IP" ] || exit 0
 HOST_DEV=$(ip route get "$AWG_IP" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
 [ -n "$HOST_DEV" ] || exit 0
