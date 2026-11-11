@@ -1,0 +1,58 @@
+--- a/templates/server.html
++++ b/templates/server.html
+@@ -2678,6 +2678,7 @@
+         { proto: 'xray', category: 'protocols', icon: '⚡', title: 'Xray (VLESS-Reality)', descKey: 'xray_desc' },
+         { proto: 'telemt', category: 'protocols', icon: '✈', title: 'Telemt (Telegram Proxy)', descKey: 'telemt_desc' },
++        { proto: 'telemt_exit_template', category: 'protocols', icon: '🚪', title: 'Telemt через AWG Exit Node', desc: 'Отдельный второй Telemt. Весь исходящий трафик направляется через уже настроенный AWG Exit Node.' },
+         { proto: 'wireguard', category: 'protocols', icon: '🔒', title: 'WireGuard', descKey: 'wireguard_desc' },
+@@ -2888,14 +2889,19 @@
+                         ${apps.map(app => {
+                             const isSmart = app.proto === 'smartroute';
+                             const isRkn = app.proto === 'rknblock';
+                             const isWarp = app.proto === 'warp';
++                            const isTelemtExitTemplate = app.proto === 'telemt_exit_template';
+                             const rknUnknown = isRkn && (!rknBlockStatus || rknBlockStatus.available === false);
+                             const isHostApp = isSmart || isRkn || isWarp;
+-                            const installed = isSmart ? !!(smartRouteStatus && smartRouteStatus.installed)
++                            const telemt2Info = (currentProtocolStatus || {})['telemt__2'];
++                            const baseTelemtInstalled = isAppInstalled((currentProtocolStatus || {}).telemt);
++                            const installed = isTelemtExitTemplate ? isAppInstalled(telemt2Info)
++                                : (isSmart ? !!(smartRouteStatus && smartRouteStatus.installed)
+                                 : (isRkn ? !!(rknBlockStatus && rknBlockStatus.installed)
+                                     : (isWarp ? warpIsInstalled()
+-                                        : baseInstalled(app.proto)));
+-                            const canInstallAnother = installed && isMultiInstanceBase(app.proto);
+-                            const action = isSmart
++                                        : baseInstalled(app.proto))));
++                            const canInstallAnother = !isTelemtExitTemplate && installed && isMultiInstanceBase(app.proto);
++                            const action = isTelemtExitTemplate
++                                ? (installed
++                                    ? `onclick="closeModal('marketplaceModal'); openTelemtExitModal('telemt__2')"`
++                                    : (baseTelemtInstalled ? `onclick="installFromMarketplace('telemt', true)"` : 'disabled'))
++                                : (isSmart
+                                 ? `onclick="openSmartRouteModal()"`
+                                 : (isWarp
+                                     ? (installed ? 'disabled' : `onclick="closeModal('marketplaceModal'); installWarp()"`)
+@@ -2905,7 +2911,8 @@
+                                     : (isRkn
+                                         ? (installed || rknUnknown ? 'disabled' : `onclick="closeModal('marketplaceModal'); installRknBlock()"`)
+-                                        : (installed && !canInstallAnother ? 'disabled' : `onclick="installFromMarketplace('${app.proto}', ${canInstallAnother ? 'true' : 'false'})"`)));
+-                            const statusBadge = isWarp
++                                        : (installed && !canInstallAnother ? 'disabled' : `onclick="installFromMarketplace('${app.proto}', ${canInstallAnother ? 'true' : 'false'})"`))));
++                            const statusBadge = isTelemtExitTemplate
++                                ? (installed ? `<span class="badge badge-success"><span class="badge-dot"></span> Установлен</span>` : `<span class="badge badge-warn"><span class="badge-dot"></span> ${baseTelemtInstalled ? 'Не установлен' : 'Сначала установи обычный Telemt'}</span>`)
++                                : (isWarp
+                                 ? warpAggregateBadge()
+                                 : (isHostApp
+                                     ? (installed
+@@ -2914,7 +2921,7 @@
+                                         : `<span class="badge badge-warn"><span class="badge-dot"></span> ${_(rknUnknown ? 'rknblock_state_unreachable' : 'not_installed')}</span>`)
+-                                    : marketplaceAppStatus(app.proto));
++                                    : marketplaceAppStatus(app.proto)));
+@@ -2928,7 +2935,7 @@
+-                                    <div class="marketplace-app-desc">${app.desc || _(app.descKey)}</div>
++                                    <div class="marketplace-app-desc">${app.desc || _(app.descKey)}</div>
+                                     <button class="btn ${installed && !canInstallAnother ? 'btn-secondary' : 'btn-primary'} btn-sm" ${action}>
+-                                        ${isSmart ? _('smartroute_open') : (canInstallAnother ? _('install_another') : (installed ? _('installed') : _('install')))}
++                                        ${isTelemtExitTemplate ? (installed ? 'Настроить Exit Node' : 'Установить второй Telemt') : (isSmart ? _('smartroute_open') : (canInstallAnother ? _('install_another') : (installed ? _('installed') : _('install'))))}
+                                     </button>
