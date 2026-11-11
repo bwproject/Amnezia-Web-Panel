@@ -13,8 +13,8 @@ remove_rules() {
   if [ -n "${TELEMT_IP:-}" ]; then
     docker exec "$AWG_CONTAINER" sh -c "
       ip -4 rule del pref 124 2>/dev/null || true
-      iptables -D FORWARD -i eth0 -o exit0 -s '$TELEMT_IP/32' -j ACCEPT 2>/dev/null || true
-      iptables -D FORWARD -i exit0 -o eth0 -d '$TELEMT_IP/32' -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+      iptables -D FORWARD -i '$TELEMT_DEV' -o exit0 -s '$TELEMT_IP/32' -j ACCEPT 2>/dev/null || true
+      iptables -D FORWARD -i exit0 -o '$TELEMT_DEV' -d '$TELEMT_IP/32' -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
       iptables -t nat -D POSTROUTING -s '$TELEMT_IP/32' -o exit0 -j MASQUERADE 2>/dev/null || true
     " >/dev/null 2>&1 || true
   fi
@@ -26,7 +26,9 @@ TELEMT_RUNNING=$(docker inspect -f '{{.State.Running}}' "$TELEMT_CONTAINER" 2>/d
 if [ "$TELEMT_RUNNING" != true ]; then remove_rules; exit 0; fi
 [ -n "$TELEMT_IP" ] && [ -n "$AWG_IP" ] || exit 0
 HOST_DEV=$(ip route get "$AWG_IP" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
-[ -n "$HOST_DEV" ] || exit 0
+TELEMT_ROUTE=$(docker exec "$AWG_CONTAINER" ip route get "$TELEMT_IP" 2>/dev/null || true)
+TELEMT_DEV=$(printf '%s\n' "$TELEMT_ROUTE" | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
+[ -n "$HOST_DEV" ] && [ -n "$TELEMT_DEV" ] || exit 0
 # A blackhole remains in place unless the selected AWG tunnel is ready.
 ip -4 rule del pref 124 2>/dev/null || true
 ip -4 route replace blackhole default table 203
@@ -38,8 +40,8 @@ docker exec "$AWG_CONTAINER" sh -c "
   ip -4 route replace default dev exit0 table 204
   sysctl -w net.ipv4.ip_forward=1 >/dev/null
   sysctl -w net.ipv4.conf.all.rp_filter=2 >/dev/null 2>&1 || true
-  iptables -C FORWARD -i eth0 -o exit0 -s '$TELEMT_IP/32' -j ACCEPT 2>/dev/null || iptables -A FORWARD -i eth0 -o exit0 -s '$TELEMT_IP/32' -j ACCEPT
-  iptables -C FORWARD -i exit0 -o eth0 -d '$TELEMT_IP/32' -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -i exit0 -o eth0 -d '$TELEMT_IP/32' -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+  iptables -C FORWARD -i '$TELEMT_DEV' -o exit0 -s '$TELEMT_IP/32' -j ACCEPT 2>/dev/null || iptables -A FORWARD -i '$TELEMT_DEV' -o exit0 -s '$TELEMT_IP/32' -j ACCEPT
+  iptables -C FORWARD -i exit0 -o '$TELEMT_DEV' -d '$TELEMT_IP/32' -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -i exit0 -o '$TELEMT_DEV' -d '$TELEMT_IP/32' -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
   iptables -t nat -C POSTROUTING -s '$TELEMT_IP/32' -o exit0 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s '$TELEMT_IP/32' -o exit0 -j MASQUERADE
 " || exit 1
 ip -4 route replace default via "$AWG_IP" dev "$HOST_DEV" table 203
