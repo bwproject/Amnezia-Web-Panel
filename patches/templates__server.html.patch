@@ -275,6 +275,11 @@
      let currentSocks5Proto = 'socks5';
 +    let currentTelemtExitProto = 'telemt';
      let currentAwgProto = 'awg2';
+@@ -4094,3 +4094,4 @@
+                 } else if (isService) {
+                     ctrlEl.innerHTML = `
++                        ${protoBase(proto) === 'telemt' ? `<button class="btn btn-secondary btn-sm" onclick="openTelemtExitModal('${proto}')" title="Route Telemt via an existing AWG Exit Node">🚪 Exit Node</button>` : ''}
+                         <button class="btn btn-danger btn-sm" onclick="toggleContainer('${proto}', true)" title="${_('stop_container_confirm').replace('{}', '')}">${_('stop_btn')}</button>
 @@ -4109,4 +4180,5 @@
                      ctrlEl.innerHTML = `
                          ${awgBtn}
