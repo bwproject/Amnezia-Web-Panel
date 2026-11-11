@@ -68,6 +68,7 @@ import telegram_bot as tg_bot
 from telegram_exit_transport import TelegramExitHTTPClient
 
 from exit_link_service import ExitLinkError, ExitLinkService
+from telemt_exit_service import TelemtExitService
 from smartroute_service import SmartRouteError, SmartRouteService, split_instances
 from warp_service import (
     INSTANCE_STATES,
@@ -7006,6 +7007,82 @@ def api_exit_nodes(request: Request):
         node['telegram_available'] = _telegram_exit_available(data, node['uid'])
     return {'status': 'success', 'exit_nodes': nodes}
 
+
+@app.get('/api/servers/{server_id}/telemt/exit-options', tags=["Protocols"])
+def api_telemt_exit_options(request: Request, server_id: int, telemt_protocol: str = 'telemt'):
+    """AWG instances on this server that already use an Exit Node."""
+    if not _check_admin(request):
+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
+    data = load_data()
+    if not 0 <= server_id < len(data.get('servers') or []):
+        return JSONResponse({'error': 'Server not found'}, status_code=404)
+    server = data['servers'][server_id]
+    options = []
+    for awg_protocol, record in (server.get('protocols') or {}).items():
+        if awg_protocol.split('__', 1)[0] not in AWG_PROTOCOLS or not record.get('installed'):
+            continue
+        link = record.get('exit_link') or {}
+        if not link.get('exit_uid') or link.get('stale'):
+            continue
+        options.append({
+            'protocol': awg_protocol,
+            'label': f"{protocol_display_name(awg_protocol, record.get('header_protection'), record.get('protocol_version'))} → {link.get('exit_name') or link.get('exit_uid')}",
+            'exit_uid': link.get('exit_uid'),
+            'exit_name': link.get('exit_name') or '',
+        })
+    telemt_exit = ((server.get('protocols') or {}).get(telemt_protocol) or {}).get('telemt_exit') or {'enabled': False}
+    return {'status': 'success', 'options': options, 'telemt_exit': telemt_exit}
+
+
+@app.post('/api/servers/{server_id}/telemt/exit-link', tags=["Protocols"])
+async def api_telemt_exit_link(request: Request, server_id: int):
+    """Route only this Telemt container through an already-linked AWG instance."""
+    if not _check_admin(request):
+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
+    try:
+        body = await request.json()
+        protocol = str(body.get('protocol') or 'telemt')
+        awg_protocol = str(body.get('awg_protocol') or '')
+        data = load_data()
+        if not 0 <= server_id < len(data.get('servers') or []):
+            return JSONResponse({'error': 'Server not found'}, status_code=404)
+        server = data['servers'][server_id]
+        result = await asyncio.to_thread(
+            TelemtExitService(get_ssh).link, server, protocol, awg_protocol)
+        async with DATA_LOCK:
+            data = load_data()
+            record = (data['servers'][server_id].setdefault('protocols', {})).setdefault(protocol, {})
+            record['telemt_exit'] = result
+            save_data(data)
+        return {'status': 'success', 'telemt_exit': result}
+    except Exception as e:
+        logger.exception("Error linking Telemt through AWG Exit Node")
+        return JSONResponse({'error': str(e)}, status_code=400)
+
+
+@app.post('/api/servers/{server_id}/telemt/exit-link/remove', tags=["Protocols"])
+async def api_telemt_exit_unlink(request: Request, server_id: int):
+    """Restore direct Telemt egress and remove its policy-routing rules."""
+    if not _check_admin(request):
+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
+    try:
+        body = await request.json()
+        protocol = str(body.get('protocol') or 'telemt')
+        data = load_data()
+        if not 0 <= server_id < len(data.get('servers') or []):
+            return JSONResponse({'error': 'Server not found'}, status_code=404)
+        server = data['servers'][server_id]
+        result = await asyncio.to_thread(
+            TelemtExitService(get_ssh).unlink, server, protocol)
+        async with DATA_LOCK:
+            data = load_data()
+            record = (data['servers'][server_id].get('protocols') or {}).get(protocol) or {}
+            record.pop('telemt_exit', None)
+            save_data(data)
+        return {'status': 'success', 'telemt_exit': result}
+    except Exception as e:
+        logger.exception("Error unlinking Telemt from AWG Exit Node")
+        return JSONResponse({'error': str(e)}, status_code=400)
 
 @app.post('/api/servers/{server_id}/exit-link', tags=["Protocols"])
 @serialize_peer_lifecycle
