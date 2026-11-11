@@ -394,12 +394,17 @@
          save_data(data)
          return {'status': 'started', 'bot_running': True}
 
-@@ -92,6 +92,7 @@
+
+--- a/app.py
++++ b/app.py
+@@ -92,3 +92,4 @@
  from exit_link_service import ExitLinkError, ExitLinkService
 +from telemt_exit_service import TelemtExitService
  from smartroute_service import SmartRouteError, SmartRouteService, split_instances
  from warp_service import (
-@@ -6888,6 +6889,61 @@
+--- a/app.py
++++ b/app.py
+@@ -6888,3 +6888,78 @@
      return {'status': 'success', 'exit_nodes': exit_link_svc.list_exit_nodes(load_data())}
  
 +
