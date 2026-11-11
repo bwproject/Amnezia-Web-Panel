@@ -300,7 +300,7 @@
 +        remove.classList.add('hidden');
 +        openModal('telemtExitModal');
 +        try {
-+            const state = await apiCall(`/api/servers/${SERVER_ID}/telemt/exit-options?protocol=${encodeURIComponent(currentTelemtExitProto)}`);
++            const state = await apiCall(`/api/servers/${SERVER_ID}/telemt/exit-options?telemt_protocol=${encodeURIComponent(currentTelemtExitProto)}`);
 +            (state.options || []).forEach(item => {
 +                const option = document.createElement('option');
 +                option.value = item.protocol;
