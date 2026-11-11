@@ -281,12 +281,12 @@
 +                        ${telemtExitBtn}
                          ${exitBtn}
                          ${endpointBtn}
-@@ -5202,1 +5309,71 @@ -5199,4 +5228,74 @@
+@@ -5198,6 +5227,76 @@
              spinner.classList.add('hidden');
          }
      }
  
--    // ========== Exit node ==========
+     // ========== Exit node ==========
 +    // ========== Telemt Exit Node routing ==========
 +    async function openTelemtExitModal(proto = 'telemt') {
 +        currentTelemtExitProto = proto || 'telemt';
@@ -357,4 +357,4 @@
 +        }
 +    }
 +
-+    // ========== Exit node ==========
+     // ========== Exit node ==========
