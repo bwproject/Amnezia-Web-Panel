@@ -21,13 +21,13 @@ remove_rules() {
 }
 TELEMT_IP=$(docker inspect -f '{{(index .NetworkSettings.Networks "bridge").IPAddress}}' "$TELEMT_CONTAINER" 2>/dev/null || echo "${TELEMT_IP_SAVED:-}")
 AWG_IP=$(docker inspect -f '{{(index .NetworkSettings.Networks "bridge").IPAddress}}' "$AWG_CONTAINER" 2>/dev/null || true)
+TELEMT_ROUTE=$(docker exec "$AWG_CONTAINER" ip route get "$TELEMT_IP" 2>/dev/null || true)
+TELEMT_DEV=$(printf '%s\n' "$TELEMT_ROUTE" | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
 if [ "${ENABLED:-0}" != 1 ]; then remove_rules; exit 0; fi
 TELEMT_RUNNING=$(docker inspect -f '{{.State.Running}}' "$TELEMT_CONTAINER" 2>/dev/null || echo false)
 if [ "$TELEMT_RUNNING" != true ]; then remove_rules; exit 0; fi
 [ -n "$TELEMT_IP" ] && [ -n "$AWG_IP" ] || exit 0
 HOST_DEV=$(ip route get "$AWG_IP" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
-TELEMT_ROUTE=$(docker exec "$AWG_CONTAINER" ip route get "$TELEMT_IP" 2>/dev/null || true)
-TELEMT_DEV=$(printf '%s\n' "$TELEMT_ROUTE" | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
 [ -n "$HOST_DEV" ] && [ -n "$TELEMT_DEV" ] || exit 0
 # A blackhole remains in place unless the selected AWG tunnel is ready.
 ip -4 rule del pref 124 2>/dev/null || true
