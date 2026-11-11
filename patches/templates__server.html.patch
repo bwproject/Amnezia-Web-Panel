@@ -243,7 +243,7 @@
 
 --- a/templates/server.html
 +++ b/templates/server.html
-@@ -1287,3 +1287,26 @@
+@@ -1293,3 +1293,26 @@
      </div>
  
 +    <!-- Telemt Exit Node routing -->
@@ -270,11 +270,11 @@
 +    </div>
 +
      <!-- WireGuard Card -->
-@@ -2700,2 +2720,3 @@
+@@ -2699,2 +2762,3 @@
      let currentSocks5Proto = 'socks5';
 +    let currentTelemtExitProto = 'telemt';
      let currentAwgProto = 'awg2';
-@@ -4120,6 +4141,7 @@
+@@ -4099,6 +4169,7 @@
                      const awgBtn = AWG_PROTOCOLS.includes(protoBase(proto))
                          ? `<button class="btn btn-secondary btn-sm" onclick="openAwgSettings('${proto}')" title="${_('awg_settings_title')}">${_('awg_settings_btn')}</button>`
                          : '';
@@ -282,13 +282,13 @@
                      const exitBtn = AWG_PROTOCOLS.includes(protoBase(proto))
                          ? `<button class="btn btn-secondary btn-sm" onclick="openExitLinkModal('${proto}')" title="${_('exit_link_title')}">🚪${info.exit_link ? ' ' + escapeHtml(info.exit_link.exit_name || '') : ''}</button>`
                          : '';
-@@ -4127,4 +4149,5 @@
+@@ -4109,4 +4180,5 @@
                      ctrlEl.innerHTML = `
                          ${awgBtn}
 +                        ${telemtExitBtn}
                          ${exitBtn}
                          ${endpointBtn}
-@@ -5198,1 +5221,71 @@
+@@ -5202,1 +5309,71 @@
 -    // ========== Exit node ==========
 +    // ========== Telemt Exit Node routing ==========
 +    async function openTelemtExitModal(proto = 'telemt') {
