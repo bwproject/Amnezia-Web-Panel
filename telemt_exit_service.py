@@ -10,12 +10,14 @@ set -eu
 remove_rules() {
   ip -4 rule del pref 121 2>/dev/null || true
   ip -4 route flush table 203 2>/dev/null || true
-  docker exec "$AWG_CONTAINER" sh -c "
-    ip -4 rule del pref 121 2>/dev/null || true
-    iptables -D FORWARD -i eth0 -o bwexit0 -s '$TELEMT_IP/32' -j ACCEPT 2>/dev/null || true
-    iptables -D FORWARD -i bwexit0 -o eth0 -d '$TELEMT_IP/32' -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
-    iptables -t nat -D POSTROUTING -s '$TELEMT_IP/32' -o bwexit0 -j MASQUERADE 2>/dev/null || true
-  " >/dev/null 2>&1 || true
+  if [ -n "${TELEMT_IP:-}" ]; then
+    docker exec "$AWG_CONTAINER" sh -c "
+      ip -4 rule del pref 121 2>/dev/null || true
+      iptables -D FORWARD -i eth0 -o bwexit0 -s '$TELEMT_IP/32' -j ACCEPT 2>/dev/null || true
+      iptables -D FORWARD -i bwexit0 -o eth0 -d '$TELEMT_IP/32' -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+      iptables -t nat -D POSTROUTING -s '$TELEMT_IP/32' -o bwexit0 -j MASQUERADE 2>/dev/null || true
+    " >/dev/null 2>&1 || true
+  fi
 }
 if [ "\${ENABLED:-0}" != 1 ]; then remove_rules; exit 0; fi
 docker network connect bridge "$TELEMT_CONTAINER" >/dev/null 2>&1 || true
@@ -66,11 +68,12 @@ class TelemtExitService:
             raise RuntimeError((err or out or f"command failed ({code})").strip())
         return out
 
-    def _install_router(self, ssh, telemt_container, awg_container, enabled):
+    def _install_router(self, ssh, telemt_container, awg_container, enabled, telemt_ip=""):
         env = (
             f"ENABLED={'1' if enabled else '0'}\n"
             f"TELEMT_CONTAINER={shlex.quote(telemt_container)}\n"
             f"AWG_CONTAINER={shlex.quote(awg_container)}\n"
+            f"TELEMT_IP_SAVED={shlex.quote(telemt_ip)}\n"
         )
         service = (
             "[Unit]\nDescription=BW Telemt via existing AWG Exit Node\n"
@@ -124,9 +127,13 @@ class TelemtExitService:
             awg = AWGManager(ssh)
             telemt_container = self._telemt_container(telemt_protocol)
             awg_container = awg._container_name(awg_protocol)
+            self._run(ssh, f"docker network connect bridge {shlex.quote(telemt_container)} >/dev/null 2>&1 || true")
             self._run(ssh, f"docker inspect {shlex.quote(telemt_container)} >/dev/null")
             self._run(ssh, f"docker inspect {shlex.quote(awg_container)} >/dev/null")
-            self._install_router(ssh, telemt_container, awg_container, True)
+            telemt_ip = self._run(
+                ssh, f"docker inspect -f '{{{{(index .NetworkSettings.Networks \"bridge\").IPAddress}}}}' {shlex.quote(telemt_container)}"
+            ).strip()
+            self._install_router(ssh, telemt_container, awg_container, True, telemt_ip)
         finally:
             ssh.disconnect()
         return {
@@ -135,6 +142,7 @@ class TelemtExitService:
             "exit_name": link.get("exit_name") or "",
             "telemt_container": telemt_container,
             "awg_container": awg_container,
+            "telemt_ip": telemt_ip,
         }
 
     def unlink(self, server, telemt_protocol):
@@ -150,6 +158,7 @@ class TelemtExitService:
             self._install_router(
                 ssh, saved.get("telemt_container") or self._telemt_container(telemt_protocol),
                 saved.get("awg_container") or "amnezia-awg", False,
+                saved.get("telemt_ip") or "",
             )
         finally:
             ssh.disconnect()
