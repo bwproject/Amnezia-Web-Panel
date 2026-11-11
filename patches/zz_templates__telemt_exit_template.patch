@@ -6,7 +6,7 @@
 @@ -2893,1 +2894,2 @@
                              const isWarp = app.proto === 'warp';
 +                            const isTelemtExitTemplate = app.proto === 'telemt_exit_template';
-@@ -2895,4 +2897,6 @@
+@@ -2895,5 +2897,8 @@
                              const isHostApp = isSmart || isRkn || isWarp;
 -                            const installed = isSmart ? !!(smartRouteStatus && smartRouteStatus.installed)
 +                            const telemt2Info = (currentProtocolStatus || {})['telemt__2'];
@@ -17,7 +17,7 @@
                                      : (isWarp ? warpIsInstalled()
 -                                        : baseInstalled(app.proto)));
 +                                        : baseInstalled(app.proto))));
-@@ -2900,1 +2904,4 @@
+@@ -2900,1 +2904,5 @@
 -                            const action = isSmart
 +                            const action = isTelemtExitTemplate
 +                                ? (installed
