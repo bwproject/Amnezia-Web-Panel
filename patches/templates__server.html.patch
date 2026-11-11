@@ -141,10 +141,11 @@
                      <button class="btn btn-secondary btn-sm" onclick="openSocks5Settings('${proto}')" style="flex:1">${_('socks5_change_settings')}</button>
                      <button class="btn btn-secondary btn-sm" onclick="showProtocolBackups('${proto}')">${_('backup')}</button>
                      <button class="btn btn-danger btn-sm" onclick="uninstallProtocol('${proto}')">${_('uninstall')}</button>
-@@ -4099,7 +4169,7 @@
+@@ -4099,7 +4169,8 @@
                      const awgBtn = AWG_PROTOCOLS.includes(protoBase(proto))
                          ? `<button class="btn btn-secondary btn-sm" onclick="openAwgSettings('${proto}')" title="${_('awg_settings_title')}">${_('awg_settings_btn')}</button>`
                          : '';
++                    const telemtExitBtn = protoBase(proto) === 'telemt' ? `<button class="btn btn-secondary btn-sm" onclick="openTelemtExitModal('${proto}')" title="Route Telemt via an existing AWG Exit Node">🚪 Exit Node</button>` : '';
 -                    const exitBtn = AWG_PROTOCOLS.includes(protoBase(proto))
 +                    const exitBtn = (AWG_PROTOCOLS.includes(protoBase(proto)) || protoBase(proto) === 'wireguard')
                          ? `<button class="btn btn-secondary btn-sm" onclick="openExitLinkModal('${proto}')" title="${_('exit_link_title')}">🚪${info.exit_link ? ' ' + escapeHtml(info.exit_link.exit_name || '') : ''}</button>`
@@ -274,14 +275,6 @@
      let currentSocks5Proto = 'socks5';
 +    let currentTelemtExitProto = 'telemt';
      let currentAwgProto = 'awg2';
-@@ -4099,6 +4169,7 @@
-                     const awgBtn = AWG_PROTOCOLS.includes(protoBase(proto))
-                         ? `<button class="btn btn-secondary btn-sm" onclick="openAwgSettings('${proto}')" title="${_('awg_settings_title')}">${_('awg_settings_btn')}</button>`
-                         : '';
-+                    const telemtExitBtn = protoBase(proto) === 'telemt' ? `<button class="btn btn-secondary btn-sm" onclick="openTelemtExitModal('${proto}')" title="Route Telemt via an existing AWG Exit Node">🚪 Exit Node</button>` : '';
-                     const exitBtn = AWG_PROTOCOLS.includes(protoBase(proto))
-                         ? `<button class="btn btn-secondary btn-sm" onclick="openExitLinkModal('${proto}')" title="${_('exit_link_title')}">🚪${info.exit_link ? ' ' + escapeHtml(info.exit_link.exit_name || '') : ''}</button>`
-                         : '';
 @@ -4109,4 +4180,5 @@
                      ctrlEl.innerHTML = `
                          ${awgBtn}
