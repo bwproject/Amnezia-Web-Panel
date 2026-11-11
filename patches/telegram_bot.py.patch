@@ -4,7 +4,7 @@
      return _bot_task is not None and not _bot_task.done()
  
  
-+_ssh_credential_resolver = None
+ _ssh_credential_resolver = None
 +
 -def launch_bot(token: str, load_data_fn: Callable, generate_vpn_link_fn: Callable, save_data_fn: Optional[Callable] = None, self_service_svc=None):
 -    global _bot_task
