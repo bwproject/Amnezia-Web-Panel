@@ -430,7 +430,8 @@
 +            'exit_uid': link.get('exit_uid'),
 +            'exit_name': link.get('exit_name') or '',
 +        })
-+    return {'status': 'success', 'options': options}
++    telemt_exit = ((server.get('protocols') or {}).get(telemt_protocol) or {}).get('telemt_exit') or {'enabled': False}
++    return {'status': 'success', 'options': options, 'telemt_exit': telemt_exit}
 +
 +
 +@app.post('/api/servers/{server_id}/telemt/exit-link', tags=["Protocols"])
