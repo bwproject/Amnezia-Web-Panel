@@ -1,6 +1,6 @@
 --- a/telegram_bot.py
 +++ b/telegram_bot.py
-@@ -785,12 +785,12 @@
+@@ -785,13 +785,13 @@
      return _bot_task is not None and not _bot_task.done()
  
  
