@@ -277,7 +277,6 @@
 +        node['telegram_available'] = _telegram_exit_available(data, node['uid'])
 +    return {'status': 'success', 'exit_nodes': nodes}
  
- 
  @app.post('/api/servers/{server_id}/exit-link', tags=["Protocols"])
  @serialize_peer_lifecycle
 @@ -8063,8 +8181,9 @@
@@ -404,7 +403,7 @@
  from warp_service import (
 --- a/app.py
 +++ b/app.py
-@@ -6888,4 +6888,80 @@
+@@ -6888,4 +6888,79 @@
      return {'status': 'success', 'exit_nodes': exit_link_svc.list_exit_nodes(load_data())}
  
 +
