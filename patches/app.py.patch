@@ -404,7 +404,7 @@
  from warp_service import (
 --- a/app.py
 +++ b/app.py
-@@ -6888,5 +6888,78 @@
+@@ -6888,5 +6888,81 @@
      return {'status': 'success', 'exit_nodes': exit_link_svc.list_exit_nodes(load_data())}
  
 +
