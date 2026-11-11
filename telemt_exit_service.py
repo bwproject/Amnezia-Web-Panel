@@ -136,6 +136,12 @@ class TelemtExitService:
             telemt_ip = self._run(
                 ssh, f"docker inspect -f '{{{{(index .NetworkSettings.Networks \"bridge\").IPAddress}}}}' {shlex.quote(telemt_container)}"
             ).strip()
+            awg_ip = self._run(
+                ssh, f"docker inspect -f '{{{{(index .NetworkSettings.Networks \"bridge\").IPAddress}}}}' {shlex.quote(awg_container)}"
+            ).strip()
+            if not telemt_ip or not awg_ip:
+                raise RuntimeError("Could not attach Telemt and AWG containers to Docker bridge networking")
+            self._run(ssh, f"docker exec {shlex.quote(awg_container)} ip link show exit0 >/dev/null")
             self._install_router(ssh, telemt_container, awg_container, True, telemt_ip)
         finally:
             ssh.disconnect()
