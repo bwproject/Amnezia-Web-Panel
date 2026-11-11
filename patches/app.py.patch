@@ -404,7 +404,7 @@
  
 +
 +@app.get('/api/servers/{server_id}/telemt/exit-options', tags=["Protocols"])
-+def api_telemt_exit_options(request: Request, server_id: int):
++def api_telemt_exit_options(request: Request, server_id: int, protocol: str = 'telemt'):
 +    """AWG instances on this server that already use an Exit Node."""
 +    if not _check_admin(request):
 +        return JSONResponse({'error': 'Forbidden'}, status_code=403)
