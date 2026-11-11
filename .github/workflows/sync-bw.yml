@@ -49,6 +49,7 @@ jobs:
           install -D overlay/bw_exit_manager.py upstream/bw_exit_manager.py
           install -D overlay/bw_wg_awg_transport.py upstream/bw_wg_awg_transport.py
           install -D overlay/telegram_exit_transport.py upstream/telegram_exit_transport.py
+          install -D overlay/telemt_exit_service.py upstream/telemt_exit_service.py
           install -D overlay/managers/wireguard_exit_manager.py upstream/managers/wireguard_exit_manager.py
           install -D overlay/managers/http_proxy_manager.py upstream/managers/http_proxy_manager.py
 
@@ -76,6 +77,7 @@ jobs:
             upstream/smartroute_service.py \
             upstream/telegram_bot.py \
             upstream/telegram_exit_transport.py \
+            upstream/telemt_exit_service.py \
             upstream/bw_exit_manager.py \
             upstream/bw_wg_awg_transport.py \
             upstream/managers/http_proxy_manager.py \
