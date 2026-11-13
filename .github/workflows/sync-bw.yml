@@ -140,4 +140,4 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-# Upstream refresh: rebuild against v1.8.10.
+# Upstream refresh: rebuild against v1.8.11.

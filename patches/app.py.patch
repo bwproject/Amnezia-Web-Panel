@@ -107,11 +107,14 @@
      protocol: str = 'awg'
  
  
-@@ -2988,8 +3007,9 @@
+@@ -3061,11 +3061,12 @@
  
  class TelegramSettings(BaseModel):
      token: str = ''
      enabled: bool = False
+     auto_create_users: bool = False
+     create_users_disabled: bool = False
+     webapp_initdata_auth: bool = False
 +    exit_uid: str = ''
  
  
