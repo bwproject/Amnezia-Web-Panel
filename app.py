@@ -4,6 +4,7 @@ import json
 import logging
 import base64
 import hashlib
+import hmac
 import ipaddress
 import secrets
 import uuid
@@ -41,7 +42,7 @@ from pydantic import BaseModel, Field, StrictBool, constr, conint
 from typing import Optional, List
 import uvicorn
 import httpx
-
+import cheburcheck
 try:
     from multicolorcaptcha import CaptchaGenerator
 except ImportError:
@@ -400,7 +401,7 @@ DATA_FILE = os.path.abspath(os.path.expanduser(
 ssh_trust.configure(DATA_FILE)
 # Client configs read the bypass list from whatever DATA_FILE is at call time.
 split_tunnel.configure(lambda: DATA_FILE)
-CURRENT_VERSION = "v1.8.10"
+CURRENT_VERSION = "v1.8.11"
 
 # Authoritative operational state for WARP lives outside data.json: dozens of
 # panel writers save their own snapshots and would overwrite it.
@@ -572,6 +573,16 @@ def load_data():
     data.setdefault('users', [])
     data.setdefault('user_connections', [])
     data.setdefault('api_tokens', [])
+    users_migrated = False
+    for user in data.get('users', []):
+        raw_limit = user.get('max_connections', 0)
+        try:
+            normalized_limit = max(0, min(100, int(raw_limit or 0)))
+        except (TypeError, ValueError, OverflowError):
+            normalized_limit = 0
+        if user.get('max_connections') != normalized_limit:
+            user['max_connections'] = normalized_limit
+            users_migrated = True
     settings = data.setdefault('settings', {})
     settings.setdefault('appearance', {
         'title': 'Amnezia',
@@ -590,7 +601,12 @@ def load_data():
     settings.setdefault('captcha', {'enabled': False})
     settings.setdefault('exit_nodes', {'default_exit_uid': ''})
     settings.setdefault('ssh_jump', {'jump_host_uid': ''})
-    settings.setdefault('telegram', {'token': '', 'enabled': False})
+    telegram_settings = settings.setdefault('telegram', {'token': '', 'enabled': False})
+    if not isinstance(telegram_settings, dict):
+        telegram_settings = settings['telegram'] = {'token': '', 'enabled': False}
+    telegram_settings.setdefault('auto_create_users', False)
+    telegram_settings.setdefault('create_users_disabled', False)
+    telegram_settings.setdefault('webapp_initdata_auth', False)
     mail = settings.setdefault('mail', dict(DEFAULT_MAIL_SETTINGS))
     for key, value in DEFAULT_MAIL_SETTINGS.items():
         mail.setdefault(key, value)
@@ -631,11 +647,13 @@ def load_data():
         server.pop('rkn_block_enabled', None)
     # Transparent upgrade: legacy plaintext SSH fields are sealed atomically on
     # first read, then only the AES-GCM envelope is kept on disk.
+    needs_save = users_migrated
     if any(isinstance(s, dict) and ('password' in s or 'private_key' in s)
            for s in data.get('servers', [])):
         from credential_store import CredentialStore, default_key_path
-        if CredentialStore(default_key_path(DATA_FILE)).seal_document(data):
-            save_data(data)
+        needs_save = CredentialStore(default_key_path(DATA_FILE)).seal_document(data) or needs_save
+    if needs_save:
+        save_data(data)
     return data
 
 
@@ -2610,6 +2628,17 @@ def static_version():
     return str(int(newest))
 
 
+def cheburcheck_enabled(data=None):
+    """Master switch for the Cheburcheck feature.
+
+    Off by default: nothing (badges, header button, popup, background checks)
+    is rendered or started until an administrator turns it on.
+    """
+    if data is None:
+        data = load_data()
+    return bool((data.get('settings') or {}).get('cheburcheck', {}).get('enabled'))
+
+
 def tpl(request, template, **kwargs):
     data = load_data()
     lang = request.cookies.get('lang', 'en')
@@ -2633,8 +2662,18 @@ def tpl(request, template, **kwargs):
         # UI dictionary (a feature showcase of the panel) into view-source.
         'login_translations_json': json.dumps({
             k: _t(k, lang) for k in ('login', 'logging_in', 'login_error',
-                                     'setup_submit', 'setup_creating', 'setup_error')
+                                     'setup_submit', 'setup_creating', 'setup_error',
+                                     'telegram_webapp_auth_invalid',
+                                     'telegram_webapp_account_not_found',
+                                     'telegram_webapp_auth_unavailable')
         }),
+        'all_translations_json': json.dumps(TRANSLATIONS),
+        'cheburcheck_enabled': cheburcheck_enabled(data),
+        'telegram_webapp_auth_enabled': bool(
+            data.get('users')
+            and (data.get('settings', {}).get('telegram') or {}).get('webapp_initdata_auth')
+            and (data.get('settings', {}).get('telegram') or {}).get('token')
+        ),
         'all_translations_json': json.dumps(TRANSLATIONS)
     }
     ctx.update(kwargs)
@@ -2668,6 +2707,10 @@ def service_worker():
 
 
 # ======================== Pydantic Models ========================
+
+class TelegramWebAppAuthRequest(BaseModel):
+    init_data: str = Field(..., min_length=1, max_length=16384)
+
 
 class LoginRequest(BaseModel):
     username: str
@@ -2977,6 +3020,7 @@ class AddUserRequest(BaseModel):
     telemt_secret: Optional[str] = None
     telemt_ad_tag: Optional[str] = None
     telemt_max_conns: Optional[int] = None
+    max_connections: int = Field(0, ge=0, le=100)
 
 
 
@@ -3037,6 +3081,9 @@ class DuckDNSApplyRequest(BaseModel):
 class TelegramSettings(BaseModel):
     token: str = ''
     enabled: bool = False
+    auto_create_users: bool = False
+    create_users_disabled: bool = False
+    webapp_initdata_auth: bool = False
     exit_uid: str = ''
 
 
@@ -3063,7 +3110,7 @@ class SelfServiceSettings(BaseModel):
     enabled: bool = False
     web_enabled: bool = True
     telegram_enabled: bool = True
-    max_connections_per_user: int = Field(5, ge=1, le=100)
+    max_connections_per_user: int = Field(5, ge=0, le=100)
     rate_limit_count: int = Field(3, ge=1, le=100)
     rate_limit_window_seconds: int = Field(60, ge=1, le=86400)
     allowed_protocols: List[str] = Field(default_factory=lambda: ['awg', 'awg2'])
@@ -3078,6 +3125,7 @@ class SelfServiceConnectionRequest(BaseModel):
 
 
 class UpdateUserRequest(BaseModel):
+    max_connections: Optional[int] = Field(None, ge=0, le=100)
     username: Optional[str] = None
     telegramId: Optional[str] = None
     email: Optional[str] = None
@@ -3306,6 +3354,14 @@ async def startup():
 
     if changed:
         save_data(data)
+    # Cheburcheck (block checks from Russia) settings.
+    # Only a real, name-keyed block is migrated here; missing keys are defaulted
+    # on read instead of written at startup, so a fresh install stays untouched
+    # until an administrator actually saves the settings.
+    if _cheburcheck_migrate_settings(data):
+        changed = True
+        logger.info('Cheburcheck: per-server flags moved from names to uids')
+
     if migrate_recovery_snapshots(DATA_FILE):
         logger.info('Encrypted legacy recovery snapshots')
 
@@ -3317,8 +3373,23 @@ async def startup():
         logger.warning("Could not mark stale IPv6 operations", exc_info=True)
 
     # Start periodic background tasks
+    try:
+        _loaded = _cheburcheck_load_cache()
+        # Drop keys that no longer match a server uid: records used to be keyed
+        # by name, and orphans would otherwise accumulate forever.
+        _uids = {s.get('uid') for s in data.get('servers', []) if s.get('uid')}
+        _clean = {k: v for k, v in _loaded.items() if k in _uids}
+        if len(_clean) != len(_loaded):
+            logger.info('Cheburcheck: dropped %d orphaned cache records' %
+                        (len(_loaded) - len(_clean)))
+        CHEBURCHECK_CACHE.update(_clean)
+        if len(_clean) != len(_loaded):
+            _cheburcheck_persist()
+    except Exception:
+        pass
     asyncio.create_task(periodic_background_tasks())
     asyncio.create_task(exit_failover_background_loop())
+    asyncio.create_task(cheburcheck_background_loop())
 
     # Re-apply public-port forwards on the fleet: hand-made iptables rules do
     # not survive reboots on their own, and only some hosts persist them.
@@ -3533,6 +3604,163 @@ async def sync_user_traffic_and_state():
             save_data(current)
         if pending:
             await asyncio.gather(*(perform_toggle_user({}, uid, False) for uid in pending))
+
+
+CHEBURCHECK_CACHE = {}
+CHEBURCHECK_CACHE_LOCK = asyncio.Lock()
+_CHEBURCHECK_TASK = None
+# server uid -> asyncio.Task for one-shot runs started from the UI
+_CHEBURCHECK_RUNNING = {}
+
+
+def _cheburcheck_enabled_servers(cfg=None, require_master=True):
+    """Servers whose cheburcheck checkbox is on.
+
+    Keyed by server uid: renaming a server must not lose its setting.
+    Returns a list of (uid, name, host) tuples.
+    """
+    data = load_data()
+    if cfg is None:
+        cfg = (data.get('settings') or {}).get('cheburcheck') or {}
+    if require_master and not cfg.get('enabled'):
+        return []
+    flags = cfg.get('servers') or {}
+    out = []
+    for srv in data.get('servers', []):
+        uid = srv.get('uid')
+        if uid is None:
+            continue
+        if flags.get(uid) or flags.get(srv.get('name')):
+            out.append((uid, srv.get('name'), srv.get('host')))
+    return out
+
+
+async def _cheburcheck_wait_out_quiet_hours():
+    """Sleep while the quiet window is open.
+
+    Returns True when the loop should restart (settings changed or the window
+    is still open after one sleep chunk) and False when checks may run.
+    """
+    for _ in range(6):                      # 6 x 5 min = one chunk
+        cfg = (load_data().get('settings') or {}).get('cheburcheck') or {}
+        if not cfg.get('enabled'):
+            return True
+        if not cheburcheck.in_quiet_hours(cfg):
+            return False
+        await asyncio.sleep(300)
+    return True
+
+
+async def cheburcheck_background_loop():
+    """Periodically check servers enabled in settings.cheburcheck from Russia."""
+    await asyncio.sleep(120)
+    while True:
+        try:
+            data = load_data()
+            cfg = (data.get('settings') or {}).get('cheburcheck') or {}
+            if not cfg.get('enabled'):
+                await asyncio.sleep(300)
+                continue
+            interval = max(1, int(cfg.get('interval_hours') or 1)) * 3600
+            if await _cheburcheck_wait_out_quiet_hours():
+                continue        # the window just changed; re-read settings
+            by_uid = {s.get('uid'): s for s in data.get('servers', [])}
+            targets = [by_uid[uid] for uid, name, host in _cheburcheck_enabled_servers(cfg)
+                       if uid in by_uid]
+            for srv in targets:
+                uid = srv.get('uid')
+                if uid in _CHEBURCHECK_RUNNING:
+                    continue
+                try:
+                    await _run_cheburcheck_one(srv)
+                except Exception as e:
+                    logger.error(f"Cheburcheck run failed for {srv.get('name')}: {e}")
+                await asyncio.sleep(13)
+            await asyncio.sleep(interval)
+        except Exception as e:
+            logger.error(f"cheburcheck_background_loop error: {e}")
+            await asyncio.sleep(300)
+
+
+async def _run_cheburcheck_one(srv):
+    """Check one server and always store a record, even when the check fails.
+
+    Without this a transient 429 leaves yesterday's verdict on screen and the
+    UI cannot tell "clean" from "check broken".
+    """
+    host = srv.get('host')
+    if not host:
+        return
+    uid = srv.get('uid')
+    task = asyncio.current_task()
+    if uid is not None:
+        _CHEBURCHECK_RUNNING[uid] = task
+    try:
+        error = None
+        static = None
+        try:
+            static = await cheburcheck.fetch_check(host)
+        except Exception as e:
+            error = f"check failed: {e}"
+        probe = None
+        if static and static.get('id'):
+            try:
+                probe = await cheburcheck.fetch_probe(static['id'])
+            except Exception as e:
+                error = f"probe failed: {e}"
+        summary = cheburcheck.build_summary(host, static, probe, error=error)
+        async with CHEBURCHECK_CACHE_LOCK:
+            CHEBURCHECK_CACHE[uid] = summary
+        try:
+            _cheburcheck_persist()
+        except Exception as e:
+            logger.warning(f"Cheburcheck persist failed: {e}")
+    finally:
+        if uid is not None and _CHEBURCHECK_RUNNING.get(uid) is task:
+            _CHEBURCHECK_RUNNING.pop(uid, None)
+
+
+def _cheburcheck_migrate_settings(data):
+    """Move settings.cheburcheck.servers from server names to uids."""
+    cfg = (data.get('settings') or {}).get('cheburcheck')
+    if not cfg:
+        return False
+    flags = cfg.get('servers') or {}
+    if not flags:
+        return False
+    by_name = {s.get('name'): s for s in data.get('servers', [])}
+    if all(k in [s.get('uid') for s in data.get('servers', [])] for k in flags):
+        return False            # already uid-keyed
+    changed = False
+    new_flags = {}
+    for key, value in flags.items():
+        srv = by_name.get(key)
+        if srv is not None:
+            new_flags[srv.get('uid')] = bool(value)
+            changed = True
+        # unknown names are dropped: the server is gone
+    cfg['servers'] = new_flags
+    return changed
+
+
+def _cheburcheck_persist():
+    import json as _j, os as _o
+    path = os.path.join(os.path.dirname(DATA_FILE), 'state', 'cheburcheck.json')
+    _o.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as f:
+        _j.dump(CHEBURCHECK_CACHE, f, ensure_ascii=False, indent=2)
+
+
+def _cheburcheck_load_cache():
+    import json as _j, os as _o
+    path = os.path.join(os.path.dirname(DATA_FILE), 'state', 'cheburcheck.json')
+    if os.path.exists(path):
+        try:
+            with open(path, encoding='utf-8') as f:
+                return _j.load(f)
+        except Exception:
+            return {}
+    return {}
 
 
 async def periodic_background_tasks():
@@ -3782,6 +4010,82 @@ def api_captcha(request: Request):
     img_bytes.seek(0)
     
     return StreamingResponse(img_bytes, media_type="image/png")
+
+
+def _verify_telegram_webapp_init_data(init_data: str, bot_token: str, now: Optional[int] = None) -> dict:
+    """Validate Telegram Mini App initData and return its authenticated user."""
+    if not isinstance(init_data, str) or not init_data or len(init_data) > 16384:
+        raise ValueError('invalid_init_data')
+    try:
+        pairs = urllib.parse.parse_qsl(init_data, keep_blank_values=True, strict_parsing=True)
+    except (ValueError, UnicodeError):
+        raise ValueError('invalid_init_data')
+    values = {}
+    for key, value in pairs:
+        if key in values:
+            raise ValueError('invalid_init_data')
+        values[key] = value
+    received_hash = values.pop('hash', '')
+    if not re.fullmatch(r'[0-9a-fA-F]{64}', received_hash):
+        raise ValueError('invalid_init_data')
+    auth_date_raw = values.get('auth_date', '')
+    try:
+        auth_date = int(auth_date_raw)
+    except (TypeError, ValueError):
+        raise ValueError('invalid_init_data')
+    current_time = int(time.time()) if now is None else int(now)
+    if auth_date > current_time + 60 or current_time - auth_date > 86400:
+        raise ValueError('expired_init_data')
+    user_raw = values.get('user', '')
+    try:
+        telegram_user = json.loads(user_raw)
+    except (TypeError, ValueError):
+        raise ValueError('invalid_init_data')
+    if not isinstance(telegram_user, dict) or not str(telegram_user.get('id') or '').isdigit():
+        raise ValueError('invalid_init_data')
+    data_check_string = '\n'.join(f'{key}={values[key]}' for key in sorted(values))
+    secret_key = hmac.new(b'WebAppData', bot_token.encode('utf-8'), hashlib.sha256).digest()
+    calculated_hash = hmac.new(secret_key, data_check_string.encode('utf-8'), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(calculated_hash, received_hash.lower()):
+        raise ValueError('invalid_init_data')
+    return telegram_user
+
+
+@app.post('/api/auth/telegram-webapp', tags=["Authentication"])
+async def api_telegram_webapp_auth(request: Request, req: TelegramWebAppAuthRequest):
+    lang = request.cookies.get('lang', 'en')
+    data = load_data()
+    telegram_settings = (data.get('settings') or {}).get('telegram') or {}
+    bot_token = str(telegram_settings.get('token') or '').strip()
+    if telegram_settings.get('webapp_initdata_auth') is not True or not bot_token:
+        return JSONResponse({'error': _t('telegram_webapp_auth_unavailable', lang)}, status_code=403)
+    try:
+        telegram_user = _verify_telegram_webapp_init_data(req.init_data, bot_token)
+    except ValueError as exc:
+        key = 'telegram_webapp_auth_invalid'
+        if str(exc) == 'expired_init_data':
+            key = 'telegram_webapp_auth_invalid'
+        return JSONResponse({'error': _t(key, lang)}, status_code=401)
+
+    telegram_id = str(telegram_user['id'])
+    async with DATA_LOCK:
+        data = load_data()
+        users = data.get('users', [])
+        user = next((item for item in users
+                     if str(item.get('telegramId') or '').strip() == telegram_id), None)
+        if user is None and (data.get('settings', {}).get('telegram') or {}).get('auto_create_users') is True:
+            created = tg_bot._auto_create_telegram_user(data, telegram_user, save_data)
+            if created:
+                user = created[0]
+        if user is None:
+            return JSONResponse({'error': _t('telegram_webapp_account_not_found', lang)}, status_code=403)
+        if user.get('role') == 'none':
+            return JSONResponse({'error': _t('telegram_webapp_account_not_found', lang)}, status_code=403)
+        if not user.get('enabled', True):
+            return JSONResponse({'error': _t('account_disabled', lang)}, status_code=403)
+        request.session.clear()
+        request.session['user_id'] = user['id']
+    return {'status': 'success', 'role': user.get('role', 'user')}
 
 
 @app.post('/api/auth/login', tags=["Authentication"])
@@ -5883,6 +6187,181 @@ async def api_rkn_scan_flags(request: Request):
     results = await asyncio.gather(
         *[collect(i, s) for i, s in enumerate(data['servers'])])
     return {str(i): s for i, s in results if s}
+
+
+# --- Cheburcheck (block check from Russia) ----------------------------------
+
+def _cheburcheck_server_index(server_id, data):
+    servers = data.get('servers', [])
+    if 0 <= server_id < len(servers):
+        return server_id
+    for i, s in enumerate(servers):
+        if str(s.get('uid')) == str(server_id):
+            return i
+    return None
+
+
+@app.post('/api/servers/cheburcheck/run_all', tags=["Servers"])
+async def api_cheburcheck_run_all(request: Request):
+    global _CHEBURCHECK_TASK
+    if not _check_admin(request):
+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
+    data = load_data()
+    cfg = (data.get('settings') or {}).get('cheburcheck') or {}
+    if not cfg.get('enabled'):
+        return {'ok': True, 'started': 0, 'reason': 'disabled'}
+    if _CHEBURCHECK_TASK is not None and not _CHEBURCHECK_TASK.done():
+        return {'ok': True, 'already_running': True}
+    by_uid = {s.get('uid'): s for s in data.get('servers', [])}
+    targets = [by_uid[uid] for uid, name, host in _cheburcheck_enabled_servers(cfg)
+               if uid in by_uid]
+    if not targets:
+        return {'ok': True, 'started': 0, 'reason': 'no_servers'}
+
+    async def runner():
+        for srv in targets:
+            try:
+                await _run_cheburcheck_one(srv)
+            except Exception as e:
+                logger.error(f"Cheburcheck run_all failed for {srv.get('name')}: {e}")
+            await asyncio.sleep(13)
+
+    _CHEBURCHECK_TASK = asyncio.create_task(runner())
+    return {'ok': True, 'started': len(targets)}
+
+
+@app.get('/api/servers/cheburcheck_flags', tags=["Servers"])
+async def api_cheburcheck_flags(request: Request):
+    if not _check_admin(request):
+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
+    data = load_data()
+    cfg = (data.get('settings') or {}).get('cheburcheck') or {}
+    enabled = bool(cfg.get('enabled'))
+    async with CHEBURCHECK_CACHE_LOCK:
+        cache = dict(CHEBURCHECK_CACHE)
+    out = {}
+    for i, s in enumerate(data.get('servers', [])):
+        c = cache.get(s.get('uid'))
+        on = bool((cfg.get('servers') or {}).get(s.get('uid')))
+        if c is None and not on:
+            continue          # nothing to show, checkbox off
+        flag = dict(c) if c is not None else {}
+        flag['enabled'] = on
+        out[str(i)] = flag
+    return {'enabled': enabled,
+            'running': bool(_CHEBURCHECK_TASK is not None and not _CHEBURCHECK_TASK.done()),
+            'flags': out}
+
+
+@app.get('/api/servers/{server_id}/cheburcheck', tags=["Servers"])
+async def api_cheburcheck_get(request: Request, server_id: int):
+    if not _check_admin(request):
+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
+    data = load_data()
+    idx = _cheburcheck_server_index(server_id, data)
+    if idx is None:
+        return JSONResponse({'error': 'Server not found'}, status_code=404)
+    srv = data['servers'][idx]
+    uid = srv.get('uid')
+    async with CHEBURCHECK_CACHE_LOCK:
+        cached = CHEBURCHECK_CACHE.get(uid)
+    cfg = (data.get('settings') or {}).get('cheburcheck') or {}
+    return {
+        'enabled_for_server': bool((cfg.get('servers') or {}).get(uid)),
+        'global_enabled': bool(cfg.get('enabled')),
+        'interval_hours': cfg.get('interval_hours', 1),
+        'running': uid in _CHEBURCHECK_RUNNING,
+        'data': cached,
+    }
+
+
+@app.post('/api/servers/{server_id}/cheburcheck/run', tags=["Servers"])
+async def api_cheburcheck_run(request: Request, server_id: int):
+    """Start a one-shot check in the background.
+
+    A full check takes 15-60s (static + 40 probes). Holding the HTTP request
+    for that long lets a proxy or the browser abort it, which looks like
+    "nothing happened". The caller polls the GET endpoint instead.
+    """
+    if not _check_admin(request):
+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
+    data = load_data()
+    idx = _cheburcheck_server_index(server_id, data)
+    if idx is None:
+        return JSONResponse({'error': 'Server not found'}, status_code=404)
+    srv = data['servers'][idx]
+    uid = srv.get('uid')
+    if uid in _CHEBURCHECK_RUNNING:
+        return {'ok': True, 'already_running': True}
+    cfg = (data.get('settings') or {}).get('cheburcheck') or {}
+    if not cfg.get('enabled'):
+        return {'ok': True, 'started': 0, 'reason': 'disabled'}
+    _CHEBURCHECK_RUNNING[uid] = asyncio.create_task(_run_cheburcheck_one(srv))
+    return {'ok': True, 'started': 1}
+
+
+@app.get('/api/settings/cheburcheck', tags=["Settings"])
+async def api_cheburcheck_settings_get(request: Request):
+    if not _check_admin(request):
+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
+    data = load_data()
+    cfg = (data.get('settings') or {}).get('cheburcheck') or {}
+    srv_map = dict(cfg.get('servers') or {})
+    for s in data.get('servers', []):
+        if s.get('uid') is not None:
+            srv_map.setdefault(s.get('uid'), False)
+    return {
+        'enabled': bool(cfg.get('enabled')),
+        'interval_hours': int(cfg.get('interval_hours') or 1),
+        'quiet_enabled': bool(cfg.get('quiet_enabled')),
+        'quiet_start': cfg.get('quiet_start', 0),
+        'quiet_end': cfg.get('quiet_end', 0),
+        'servers': srv_map,
+    }
+
+
+class CheburcheckSettingsRequest(BaseModel):
+    enabled: Optional[bool] = None
+    interval_hours: Optional[int] = None
+    quiet_enabled: Optional[bool] = None
+    quiet_start: Optional[int] = None
+    quiet_end: Optional[int] = None
+    servers: Optional[dict] = None
+
+
+@app.post('/api/settings/cheburcheck', tags=["Settings"])
+async def api_cheburcheck_settings_set(request: Request, req: CheburcheckSettingsRequest):
+    if not _check_admin(request):
+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
+    data = load_data()
+    cfg = data.setdefault('settings', {}).setdefault('cheburcheck', {})
+    if req.enabled is not None:
+        cfg['enabled'] = bool(req.enabled)
+    if req.interval_hours is not None:
+        cfg['interval_hours'] = max(1, min(24, int(req.interval_hours)))
+    if req.quiet_enabled is not None:
+        cfg['quiet_enabled'] = bool(req.quiet_enabled)
+    if req.quiet_start is not None:
+        cfg['quiet_start'] = max(0, min(23, int(req.quiet_start)))
+    if req.quiet_end is not None:
+        cfg['quiet_end'] = max(0, min(23, int(req.quiet_end)))
+    # An empty window (start == end) is not "always quiet"; drop the flag
+    # instead of blocking every check.
+    if cfg.get('quiet_enabled') and cfg.get('quiet_start') == cfg.get('quiet_end'):
+        cfg['quiet_enabled'] = False
+    known = {s.get('uid') for s in data.get('servers', []) if s.get('uid')}
+    if req.servers is not None:
+        cur = cfg.setdefault('servers', {})
+        for k, v in req.servers.items():
+            # Accept only uids of servers that exist: a stale name from an old
+            # tab must not resurrect a flag for a server that was renamed.
+            if k in known:
+                cur[k] = bool(v)
+    # keep the list in sync with the current fleet (new servers unchecked)
+    for uid in known:
+        cfg['servers'].setdefault(uid, False)
+    save_data(data)
+    return {'ok': True}
 
 
 # --- one-shot boot-restore migration ----------------------------------------
@@ -8277,7 +8756,8 @@ def api_ipv6_operation(request: Request, server_id: int, op_id: str):
 
 @app.post('/api/servers/{server_id}/uninstall', tags=["Protocols"])
 @serialize_peer_lifecycle
-async def api_uninstall_protocol(request: Request, server_id: int, req: ProtocolRequest):
+async def api_uninstall_protocol(request: Request, server_id: int, req: ProtocolRequest,
+                                 archive_blocking: bool = False):
     if not _check_admin(request):
         return JSONResponse({'error': 'Forbidden'}, status_code=403)
     try:
@@ -8285,7 +8765,7 @@ async def api_uninstall_protocol(request: Request, server_id: int, req: Protocol
         if server_id < 0 or server_id >= len(data['servers']):
             return JSONResponse({'error': 'Server not found'}, status_code=404)
         guard = _traffic_removal_guard(data, server_id=server_id, protocol=req.protocol)
-        if guard is not None:
+        if guard is not None and (not archive_blocking or protocol_base(req.protocol) != 'xray'):
             return guard
         server = data['servers'][server_id]
         if srv_warp_ctx(server, req.protocol).get('active'):
@@ -8293,6 +8773,31 @@ async def api_uninstall_protocol(request: Request, server_id: int, req: Protocol
             # tear down a container whose egress rules are still applied.
             raise SrvWarpError('srv_warp_xor_conflict', 409)
         base = protocol_base(req.protocol)
+        blocked = (ownership_rows(data, server_id=server_id, protocol=req.protocol)
+                   if archive_blocking else [])
+        archive_states = {}
+        archive_baselines = {c.get('id'): c.get('last_bytes') for c in blocked}
+        for conn in blocked:
+            observed, quiescent = await asyncio.to_thread(_probe_blocking_peer, server, conn)
+            if not quiescent:
+                return JSONResponse({
+                    'error': 'A peer linked to this protocol is still active; '
+                             'stop or remove it before archiving its accounting.',
+                    'code': 'blocked_peer_still_active',
+                    'blocking': [_blocking_row_public(conn)],
+                }, status_code=409)
+            archive_states[conn.get('id')] = observed
+        if blocked:
+            async with DATA_LOCK:
+                current = load_data()
+                current_blocked = ownership_rows(
+                    current, server_id=server_id, protocol=req.protocol)
+                if [c.get('id') for c in current_blocked] != [c.get('id') for c in blocked]:
+                    return JSONResponse({
+                        'error': 'Connection accounting changed; refresh the server page and retry.',
+                        'code': 'traffic_finalization_required',
+                        'blocking': [_blocking_row_public(c) for c in current_blocked],
+                    }, status_code=409)
         if base in AWG_PROTOCOLS and ((server.get('protocols') or {}).get(req.protocol) or {}).get('exit_link'):
             # Drop our peer on the exit while the container still exists
             try:
@@ -8308,20 +8813,59 @@ async def api_uninstall_protocol(request: Request, server_id: int, req: Protocol
             await asyncio.to_thread(manager.remove_container)
         else:
             await asyncio.to_thread(manager.remove_container, req.protocol)
-        if req.protocol in server.get('protocols', {}):
-            del server['protocols'][req.protocol]
+        archived = 0
+        if blocked:
+            async with DATA_LOCK:
+                with STATE_FILE_LOCK:
+                    data = load_data()
+                    current = data['servers'][server_id]
+                    current_blocked = ownership_rows(
+                        data, server_id=server_id, protocol=req.protocol)
+                    if (current.get('uid') != server.get('uid')
+                            or [c.get('id') for c in current_blocked] != [c.get('id') for c in blocked]):
+                        return JSONResponse({
+                            'error': 'Connection accounting changed; refresh the server page and retry.',
+                            'code': 'traffic_finalization_required',
+                            'blocking': [_blocking_row_public(c) for c in current_blocked],
+                        }, status_code=409)
+                    before = pathlib_read_data_bytes()
+                    operation_id = uuid.uuid4().hex
+                    actor = _actor_id(request, True)
+                    for conn in current_blocked:
+                        observed = archive_states.get(conn.get('id'))
+                        if conn.get('last_bytes') != archive_baselines.get(conn.get('id')):
+                            # A newer accounting scrape owns this baseline now. Never
+                            # reinterpret the older probe as a counter reset.
+                            observed = None
+                        finalize_connection_record(
+                            data, conn, current, observed,
+                            time.time(), 'protocol_uninstall_absent', operation_id, True)
+                    if req.protocol in current.get('protocols', {}):
+                        del current['protocols'][req.protocol]
+                    commit_finalize(
+                        DATA_FILE, operation_id, actor, 'protocol_archive_uninstall',
+                        recovery_digest({'server_uid': current.get('uid'),
+                                         'protocol': req.protocol,
+                                         'mode': 'protocol_uninstall_absent'}),
+                        before, data)
+                    archived = len(current_blocked)
+                    server = current
+                    _invalidate_ip_status(server.get('uid'))
+        else:
+            if req.protocol in server.get('protocols', {}):
+                del server['protocols'][req.protocol]
+                save_data(data)
+                _invalidate_ip_status(server.get('uid'))
+            # The instance is gone: its peers are gone with it, so connections
+            # pointing at this (server, protocol) would dangle forever — the
+            # modal would list a phantom that errors with 'Client not found'
+            # on every action. Purge them like server/user deletion does.
+            data['user_connections'] = [
+                c for c in data.get('user_connections', [])
+                if not (c.get('server_id') == server_id
+                        and c.get('protocol') == req.protocol)
+            ]
             save_data(data)
-            _invalidate_ip_status(server.get('uid'))
-        # The instance is gone: its peers are gone with it, so connections
-        # pointing at this (server, protocol) would dangle forever — the
-        # modal would list a phantom that errors with 'Client not found'
-        # on every action. Purge them like server/user deletion does.
-        data['user_connections'] = [
-            c for c in data.get('user_connections', [])
-            if not (c.get('server_id') == server_id
-                    and c.get('protocol') == req.protocol)
-        ]
-        save_data(data)
         ssh.disconnect()
         if base == 'exit':
             detached = await exit_link_svc.detach_entries_for_exit(server.get('uid'), 'exit_uninstalled')
@@ -8331,7 +8875,10 @@ async def api_uninstall_protocol(request: Request, server_id: int, req: Protocol
             restored = await exit_link_svc.disable_dns_via_exit_for_exit(server.get('uid'))
             if restored:
                 return {'status': 'success', 'dns_restored': restored}
-        return {'status': 'success'}
+        response = {'status': 'success'}
+        if archived:
+            response['archived'] = archived
+        return response
     except SrvWarpError:
         raise
     except Exception as e:
@@ -10085,6 +10632,7 @@ def api_list_users(request: Request, search: str = '', page: int = 1, size: int 
             'email': u.get('email'),
             'description': u.get('description'),
             'connections_count': sum(1 for c in conns if c['user_id'] == u['id']),
+            'max_connections': u.get('max_connections', 0),
             'traffic_used': u.get('traffic_used', 0),
             'traffic_total': u.get('traffic_total', 0),
             'traffic_limit': u.get('traffic_limit', 0),
@@ -10134,6 +10682,7 @@ def api_add_user(request: Request, req: AddUserRequest):
             'email': req.email,
             'description': req.description,
             'traffic_limit': int(req.traffic_limit * 1024**3) if req.traffic_limit else 0,
+            'max_connections': req.max_connections,
             'traffic_reset_strategy': req.traffic_reset_strategy or 'never',
             'traffic_used': 0,
             'traffic_total': 0,
@@ -10228,6 +10777,8 @@ async def api_update_user(request: Request, user_id: str, req: UpdateUserRequest
                     return JSONResponse({'error': str(exc)}, status_code=400)
             if req.email is not None: user['email'] = req.email
             if req.description is not None: user['description'] = req.description
+            if req.max_connections is not None:
+                user['max_connections'] = req.max_connections
             if req.traffic_limit is not None:
                 new_limit = int(req.traffic_limit * 1024**3)
                 user['traffic_limit'] = new_limit
@@ -11767,7 +12318,13 @@ def _probe_blocking_peer(server, conn):
     try:
         ssh.connect()
         manager = get_protocol_manager(ssh, conn['protocol'])
-        clients = _manager_call(manager, 'get_clients', conn['protocol'])
+        if protocol_base(conn['protocol']) == 'xray':
+            try:
+                clients = manager.get_clients(conn['protocol'], strict=True)
+            except RuntimeError as error:
+                raise RecoveryError('incomplete_peer_state') from error
+        else:
+            clients = _manager_call(manager, 'get_clients', conn['protocol'])
         if not isinstance(clients, list):
             raise RecoveryError('incomplete_peer_state')
         peers = [c for c in clients
