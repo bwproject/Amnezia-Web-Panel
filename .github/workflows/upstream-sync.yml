@@ -7,17 +7,9 @@ on:
   push:
     branches:
       - imp
-    paths:
-      - .github/workflows/upstream-sync.yml
-      - BW-OVERLAY.md
-      - patches/**
-      - '*.py'
-      - managers/**
-      - .github/workflows/sync-bw.yml
 
 permissions:
   contents: write
-  actions: write
 
 concurrency:
   group: upstream-main-sync
@@ -52,8 +44,3 @@ jobs:
             git push origin HEAD:main
             echo "main updated with upstream commit $upstream_head"
           fi
-
-      - name: Trigger overlay assembly
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run sync-bw.yml --ref imp
