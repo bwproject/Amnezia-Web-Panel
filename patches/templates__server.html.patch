@@ -92,7 +92,7 @@
 -                                    <div class="marketplace-app-desc">${_(app.descKey)}</div>
 +                                    <div class="marketplace-app-desc">${app.desc || _(app.descKey)}</div>
 @@ -3903,1 +3966,1 @@
--    const SERVICE_PROTOS = ['dns', 'socks5', 'adguard', 'nginx', 'exit'];
+-    const SERVICE_PROTOS = ['dns', 'socks5', 'adguard', 'nginx', 'haproxy', 'exit'];
 +    const SERVICE_PROTOS = ['dns', 'socks5', 'http_proxy', 'adguard', 'nginx', 'haproxy', 'exit'];
 @@ -3911,11 +3974,12 @@
          if (base === 'dns') {
