@@ -93,7 +93,7 @@
 -                                    <div class="marketplace-app-desc">${_(app.descKey)}</div>
 +                                    <div class="marketplace-app-desc">${app.desc || _(app.descKey)}</div>
                                      <button class="btn ${installed && !canInstallAnother ? 'btn-secondary' : 'btn-primary'} btn-sm" ${action}>
-@@ -5369,5 +5433,5 @@
+@@ -5370,5 +5433,5 @@
      // Services that don't have per-user "connections" — they expose a single
      // shared endpoint (DNS/proxy/admin UI) rather than per-client configs.
 -    const SERVICE_PROTOS = ['dns', 'socks5', 'adguard', 'nginx', 'haproxy', 'exit'];
