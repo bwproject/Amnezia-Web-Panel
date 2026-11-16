@@ -10,13 +10,13 @@
 +from telegram_exit_transport import TelegramExitHTTPClient
  
  from exit_link_service import ExitLinkError, ExitLinkService
-@@ -1389,9 +1392,9 @@
+@@ -1453,9 +1456,9 @@
          await asyncio.sleep(0.5)
      return get_tunnel_status(provider)
  
  
--BASE_PROTOCOLS = ['awg', 'awg2', 'awg3', 'awg_legacy', 'xray', 'telemt', 'dns', 'wireguard', 'socks5', 'adguard', 'nginx', 'exit']
-+BASE_PROTOCOLS = ['awg', 'awg2', 'awg3', 'awg_legacy', 'xray', 'telemt', 'dns', 'wireguard', 'socks5', 'http_proxy', 'adguard', 'nginx', 'exit']
+-BASE_PROTOCOLS = ['awg', 'awg2', 'awg3', 'awg_legacy', 'xray', 'telemt', 'dns', 'wireguard', 'socks5', 'adguard', 'nginx', 'haproxy', 'exit']
++BASE_PROTOCOLS = ['awg', 'awg2', 'awg3', 'awg_legacy', 'xray', 'telemt', 'dns', 'wireguard', 'socks5', 'http_proxy', 'adguard', 'nginx', 'haproxy', 'exit']
  MULTI_INSTANCE_PROTOCOLS = {'awg', 'awg2', 'awg3', 'awg_legacy', 'xray', 'telemt', 'socks5'}
  
  
