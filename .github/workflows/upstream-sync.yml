@@ -32,7 +32,6 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Compare and merge upstream main
-        id: sync
         shell: bash
         run: |
           set -euo pipefail
@@ -40,25 +39,16 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/PRVTPRO/Amnezia-Web-Panel.git
           git fetch upstream main
-          before="$(git rev-parse HEAD)"
           upstream_head="$(git rev-parse upstream/main)"
           if git merge-base --is-ancestor "$upstream_head" HEAD; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "main already contains the latest upstream commit: $upstream_head"
-            exit 0
-          fi
-          git merge --no-edit upstream/main
-          git push origin HEAD:main
-          after="$(git rev-parse HEAD)"
-          if [ "$before" != "$after" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "Updated main to include upstream commit $upstream_head"
+            echo "main already contains latest upstream commit: $upstream_head"
           else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
+            git merge --no-edit upstream/main
+            git push origin HEAD:main
+            echo "main updated with upstream commit $upstream_head"
           fi
 
       - name: Trigger overlay assembly
-        if: steps.sync.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh workflow run sync-bw.yml --ref imp
