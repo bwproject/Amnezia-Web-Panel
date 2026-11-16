@@ -294,20 +294,14 @@
      'haproxy': 'amnezia-haproxy',
  }
  
-@@ -8676,9 +8796,9 @@
- # Public ports are published on the box itself: UDP for the WireGuard family,
- # TCP for the rest. DNS resolvers and the exit node have nothing to publish.
+@@ -11029,5 +11037,5 @@
  PUBLIC_FORWARD_L4 = {
      'udp': ('awg', 'awg2', 'awg3', 'awg_legacy', 'wireguard'),
 -    'tcp': ('xray', 'telemt', 'socks5', 'nginx'),
 +    'tcp': ('xray', 'telemt', 'socks5', 'http_proxy', 'nginx'),
+     'haproxy': 'tcp',
  }
- 
- # Seconds before the startup re-apply touches SSH, so the panel is serving
- # first. Patched to 0 in tests.
-@@ -10102,13 +10222,30 @@
-         ssh = await asyncio.to_thread(get_ssh, server)
-         await asyncio.to_thread(ssh.connect)
+@@ -12671,11 +12679,28 @@
          manager = get_protocol_manager(ssh, req.protocol)
          
 +        config_available = True
@@ -320,7 +314,8 @@
 +            try:
 +                config = await asyncio.to_thread(
 +                    _manager_call, manager, 'get_client_config', req.protocol,
-+                    req.client_id, pub_host, port, public_port=pub_port)
++                    req.client_id, pub_host, port, public_port=pub_port,
++                    **xray_fp_kwargs(server, req.protocol))
 +            except RuntimeError as config_error:
 +                missing_key = 'Client private key not stored. Config cannot be reconstructed.'
 +                is_awg = protocol_base(req.protocol) in ('awg', 'awg2', 'awg3', 'awg_legacy')
