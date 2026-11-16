@@ -83,12 +83,11 @@
  <!-- ===== SOCKS5 Settings Modal ===== -->
  <div class="modal-backdrop" id="socks5SettingsModal">
      <div class="modal">
-@@ -2676,6 +2738,8 @@
+@@ -2676,6 +2738,7 @@
          { proto: 'dns', category: 'services', icon: '🔍', title: 'AmneziaDNS', descKey: 'dns_desc' },
          { proto: 'adguard', category: 'services', icon: '🛡️', title: 'AdGuard Home', descKey: 'adguard_desc' },
          { proto: 'socks5', category: 'services', icon: '🧦', title: 'SOCKS5 Proxy', descKey: 'socks5_desc' },
 +        { proto: 'http_proxy', category: 'services', icon: '🌐', title: 'HTTP Proxy (3proxy)', desc: 'Standard HTTP proxy with Basic authentication on a configurable TCP port.' },
-+        { proto: 'telemt', category: 'services', icon: '🚪', title: 'Telemt через AWG Exit Node', desc: 'Отдельный второй Telemt. Исходящий трафик будет идти через уже настроенный AWG Exit Node.' },
          { proto: 'exit', category: 'services', icon: '🚪', title: 'Exit Node', descKey: 'exit_desc', badge: 'NEW' },
          { proto: 'smartroute', category: 'services', icon: '🧭', title: 'Smart Route', descKey: 'smartroute_desc', badge: 'NEW' },
          { proto: 'warp', category: 'services', icon: '☁️', title: 'Cloudflare WARP', descKey: 'srv_warp_card_desc' },
@@ -142,11 +141,10 @@
                      <button class="btn btn-secondary btn-sm" onclick="openSocks5Settings('${proto}')" style="flex:1">${_('socks5_change_settings')}</button>
                      <button class="btn btn-secondary btn-sm" onclick="showProtocolBackups('${proto}')">${_('backup')}</button>
                      <button class="btn btn-danger btn-sm" onclick="uninstallProtocol('${proto}')">${_('uninstall')}</button>
-@@ -4099,7 +4169,8 @@
+@@ -4099,7 +4169,7 @@
                      const awgBtn = AWG_PROTOCOLS.includes(protoBase(proto))
                          ? `<button class="btn btn-secondary btn-sm" onclick="openAwgSettings('${proto}')" title="${_('awg_settings_title')}">${_('awg_settings_btn')}</button>`
                          : '';
-+                    const telemtExitBtn = protoBase(proto) === 'telemt' ? `<button class="btn btn-secondary btn-sm" onclick="openTelemtExitModal('${proto}')" title="Route Telemt via an existing AWG Exit Node">🚪 Exit Node</button>` : '';
 -                    const exitBtn = AWG_PROTOCOLS.includes(protoBase(proto))
 +                    const exitBtn = (AWG_PROTOCOLS.includes(protoBase(proto)) || protoBase(proto) === 'wireguard')
                          ? `<button class="btn btn-secondary btn-sm" onclick="openExitLinkModal('${proto}')" title="${_('exit_link_title')}">🚪${info.exit_link ? ' ' + escapeHtml(info.exit_link.exit_name || '') : ''}</button>`
@@ -245,119 +243,3 @@
 
 --- a/templates/server.html
 +++ b/templates/server.html
-@@ -1293,3 +1293,26 @@
-     </div>
- 
-+    <!-- Telemt Exit Node routing -->
-+    <div class="modal-backdrop" id="telemtExitModal">
-+        <div class="modal" style="max-width:560px;">
-+            <div class="modal-header">
-+                <h2 class="modal-title">Telemt через AWG Exit Node</h2>
-+                <button class="modal-close" onclick="closeModal('telemtExitModal')">×</button>
-+            </div>
-+            <div class="form-hint" style="margin-bottom:var(--space-md);">
-+                Через выбранный AWG пойдут только исходящие подключения Telemt. Входящий порт прокси останется доступен напрямую.
-+            </div>
-+            <div class="form-group">
-+                <label class="form-label">Существующий AWG-туннель с Exit Node</label>
-+                <select class="form-input" id="telemtExitAwgSelect"></select>
-+                <div class="form-hint" id="telemtExitHint"></div>
-+            </div>
-+            <div class="modal-footer">
-+                <button class="btn btn-secondary" onclick="closeModal('telemtExitModal')">Отмена</button>
-+                <button class="btn btn-danger hidden" id="telemtExitRemoveBtn" onclick="removeTelemtExit()">Отключить</button>
-+                <button class="btn btn-primary" id="telemtExitSaveBtn" onclick="saveTelemtExit()">Сохранить</button>
-+            </div>
-+        </div>
-+    </div>
-+
-     <!-- WireGuard Card -->
-@@ -2699,2 +2762,3 @@
-     let currentSocks5Proto = 'socks5';
-+    let currentTelemtExitProto = 'telemt';
-     let currentAwgProto = 'awg2';
-@@ -4094,3 +4094,4 @@
-                 } else if (isService) {
-                     ctrlEl.innerHTML = `
-+                        ${protoBase(proto) === 'telemt' ? `<button class="btn btn-secondary btn-sm" onclick="openTelemtExitModal('${proto}')" title="Route Telemt via an existing AWG Exit Node">🚪 Exit Node</button>` : ''}
-                         <button class="btn btn-danger btn-sm" onclick="toggleContainer('${proto}', true)" title="${_('stop_container_confirm').replace('{}', '')}">${_('stop_btn')}</button>
-@@ -4109,4 +4180,5 @@
-                     ctrlEl.innerHTML = `
-                         ${awgBtn}
-+                        ${telemtExitBtn}
-                         ${exitBtn}
-                         ${endpointBtn}
-@@ -5201,3 +5230,73 @@
- 
-+    // ========== Telemt Exit Node routing ==========
-+    async function openTelemtExitModal(proto = 'telemt') {
-+        currentTelemtExitProto = proto || 'telemt';
-+        const select = document.getElementById('telemtExitAwgSelect');
-+        const hint = document.getElementById('telemtExitHint');
-+        const save = document.getElementById('telemtExitSaveBtn');
-+        const remove = document.getElementById('telemtExitRemoveBtn');
-+        select.innerHTML = '';
-+        hint.textContent = _('loading');
-+        save.disabled = true;
-+        remove.classList.add('hidden');
-+        openModal('telemtExitModal');
-+        try {
-+            const state = await apiCall(`/api/servers/${SERVER_ID}/telemt/exit-options?telemt_protocol=${encodeURIComponent(currentTelemtExitProto)}`);
-+            (state.options || []).forEach(item => {
-+                const option = document.createElement('option');
-+                option.value = item.protocol;
-+                option.textContent = item.label;
-+                if (state.telemt_exit && state.telemt_exit.awg_protocol === item.protocol) option.selected = true;
-+                select.appendChild(option);
-+            });
-+            const linked = !!(state.telemt_exit && state.telemt_exit.enabled);
-+            hint.textContent = linked
-+                ? `Сейчас Telemt использует ${state.telemt_exit.exit_name || 'выбранную Exit Node'} через ${state.telemt_exit.awg_protocol}.`
-+                : (state.options || []).length
-+                    ? 'Выбери уже настроенный AWG Exit Link. Новый туннель создаваться не будет.'
-+                    : 'Нет подходящего AWG: сначала привяжи один из AWG-инстансов к Exit Node.';
-+            remove.classList.toggle('hidden', !linked);
-+            save.disabled = !(state.options || []).length;
-+        } catch (err) {
-+            hint.textContent = `Ошибка: ${err.message}`;
-+        }
-+    }
-+
-+    async function saveTelemtExit() {
-+        const save = document.getElementById('telemtExitSaveBtn');
-+        const protocol = document.getElementById('telemtExitAwgSelect').value;
-+        if (!protocol) return;
-+        save.disabled = true;
-+        try {
-+            await apiCall(`/api/servers/${SERVER_ID}/telemt/exit-link`, 'POST', {
-+                protocol: currentTelemtExitProto, awg_protocol: protocol
-+            });
-+            closeModal('telemtExitModal');
-+            showToast('Telemt направлен через существующий AWG Exit Node', 'success');
-+            setTimeout(() => checkServer(), 700);
-+        } catch (err) {
-+            showToast(`Ошибка: ${err.message}`, 'error');
-+        } finally {
-+            save.disabled = false;
-+        }
-+    }
-+
-+    async function removeTelemtExit() {
-+        const remove = document.getElementById('telemtExitRemoveBtn');
-+        remove.disabled = true;
-+        try {
-+            await apiCall(`/api/servers/${SERVER_ID}/telemt/exit-link/remove`, 'POST', {
-+                protocol: currentTelemtExitProto
-+            });
-+            closeModal('telemtExitModal');
-+            showToast('Маршрут Telemt через AWG отключён', 'success');
-+            setTimeout(() => checkServer(), 700);
-+        } catch (err) {
-+            showToast(`Ошибка: ${err.message}`, 'error');
-+        } finally {
-+            remove.disabled = false;
-+        }
-+    }
-+
-     // ========== Exit node ==========
-     let currentExitPeersProto = 'exit';
