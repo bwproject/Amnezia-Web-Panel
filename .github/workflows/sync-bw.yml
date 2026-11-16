@@ -4,12 +4,6 @@ on:
   push:
     branches:
       - imp
-    paths:
-      - '**.py'
-      - 'managers/**'
-      - 'patches/**'
-      - 'BW-OVERLAY.md'
-      - '.github/workflows/sync-bw.yml'
   workflow_dispatch:
 
 permissions:
