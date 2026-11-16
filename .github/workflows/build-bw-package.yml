@@ -1,0 +1,76 @@
+name: Build ProjectBW panel package
+
+on:
+  push:
+    branches:
+      - BW
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: bw-package
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/bwproject/amnezia-panel-bw
+
+jobs:
+  docker:
+    name: Build and publish complete BW panel
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout complete BW source
+        uses: actions/checkout@v4
+        with:
+          ref: BW
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate package tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+
+      - name: Build and publish BW package
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Package summary
+        run: |
+          {
+            echo "### ProjectBW panel package published"
+            echo
+            echo "Image: ghcr.io/bwproject/amnezia-panel-bw:latest"
+            echo
+            echo "Platforms: linux/amd64, linux/arm64"
+            echo
+            echo "Source branch: BW"
+            echo "Source commit: $GITHUB_SHA"
+          } >> "$GITHUB_STEP_SUMMARY"
