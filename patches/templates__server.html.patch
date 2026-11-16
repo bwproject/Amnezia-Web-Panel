@@ -88,12 +88,18 @@
          { proto: 'exit', category: 'services', icon: '🚪', title: 'Exit Node', descKey: 'exit_desc', badge: 'NEW' },
          { proto: 'smartroute', category: 'services', icon: '🧭', title: 'Smart Route', descKey: 'smartroute_desc', badge: 'NEW' },
          { proto: 'warp', category: 'services', icon: '☁️', title: 'Cloudflare WARP', descKey: 'srv_warp_card_desc' },
-@@ -4334,1 +4397,1 @@
+@@ -4333,3 +4396,3 @@
+                                     </div>
 -                                    <div class="marketplace-app-desc">${_(app.descKey)}</div>
 +                                    <div class="marketplace-app-desc">${app.desc || _(app.descKey)}</div>
-@@ -5372,1 +5435,1 @@
+                                     <button class="btn ${installed && !canInstallAnother ? 'btn-secondary' : 'btn-primary'} btn-sm" ${action}>
+@@ -5369,5 +5433,5 @@
+     // Services that don't have per-user "connections" — they expose a single
+     // shared endpoint (DNS/proxy/admin UI) rather than per-client configs.
 -    const SERVICE_PROTOS = ['dns', 'socks5', 'adguard', 'nginx', 'haproxy', 'exit'];
 +    const SERVICE_PROTOS = ['dns', 'socks5', 'http_proxy', 'adguard', 'nginx', 'haproxy', 'exit'];
+ 
+     function buildServiceInfoGrid(proto, info) {
 @@ -5377,11 +5440,12 @@
          if (base === 'dns') {
              return `<div class="protocol-info-item"><span class="protocol-info-label">${_('port')}</span><span class="protocol-info-value">172.29.172.254:53 (Internal)</span></div>`;
