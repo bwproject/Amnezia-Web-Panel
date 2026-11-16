@@ -1,6 +1,6 @@
 --- a/app.py
 +++ b/app.py
-@@ -60,10 +60,13 @@
+@@ -60,9 +60,12 @@
      stage_step as awg_plugin_stage_step,
  )
 +from managers.wireguard_exit_manager import WireGuardExitManager
