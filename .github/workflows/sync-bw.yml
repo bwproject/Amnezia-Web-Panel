@@ -104,4 +104,4 @@ jobs:
         if: steps.assemble.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run build-bw-package.yml --ref BW
+        run: gh workflow run build-bw-package.yml --repo bwproject/Amnezia-Web-Panel --ref BW
