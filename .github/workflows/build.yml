@@ -3,6 +3,10 @@ name: Build Binaries
 on:
   push:
     branches: [ "main" ]
+    paths-ignore:
+      - '.github/workflows/upstream-sync.yml'
+      - '.github/workflows/sync-bw.yml'
+      - '.github/workflows/build-bw-package.yml'
     tags:
       - 'v*'
   workflow_dispatch:
