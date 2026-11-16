@@ -107,7 +107,7 @@
      protocol: str = 'awg'
  
  
-@@ -3061,11 +3061,12 @@
+@@ -3061,11 +3080,12 @@
  
  class TelegramSettings(BaseModel):
      token: str = ''
@@ -246,7 +246,7 @@
  def api_socks5_get_credentials(request: Request, server_id: int, protocol: str = 'socks5'):
      """Return the current SOCKS5 port/username/password for the panel UI."""
      if not _check_admin(request):
-@@ -6970,14 +6970,111 @@
+@@ -6970,14 +7067,36 @@
  def _smartroute_error(e: SmartRouteError):
      return JSONResponse({'error': e.code, 'message': str(e)}, status_code=e.status_code)
  
@@ -282,84 +282,9 @@
  
  
 +
-+@app.get('/api/servers/{server_id}/telemt/exit-options', tags=["Protocols"])
-+def api_telemt_exit_options(request: Request, server_id: int, telemt_protocol: str = 'telemt'):
-+    """AWG instances on this server that already use an Exit Node."""
-+    if not _check_admin(request):
-+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
-+    data = load_data()
-+    if not 0 <= server_id < len(data.get('servers') or []):
-+        return JSONResponse({'error': 'Server not found'}, status_code=404)
-+    server = data['servers'][server_id]
-+    options = []
-+    for awg_protocol, record in (server.get('protocols') or {}).items():
-+        if awg_protocol.split('__', 1)[0] not in AWG_PROTOCOLS or not record.get('installed'):
-+            continue
-+        link = record.get('exit_link') or {}
-+        if not link.get('exit_uid') or link.get('stale'):
-+            continue
-+        options.append({
-+            'protocol': awg_protocol,
-+            'label': f"{protocol_display_name(awg_protocol, record.get('header_protection'), record.get('protocol_version'))} → {link.get('exit_name') or link.get('exit_uid')}",
-+            'exit_uid': link.get('exit_uid'),
-+            'exit_name': link.get('exit_name') or '',
-+        })
-+    telemt_exit = ((server.get('protocols') or {}).get(telemt_protocol) or {}).get('telemt_exit') or {'enabled': False}
-+    return {'status': 'success', 'options': options, 'telemt_exit': telemt_exit}
-+
-+
-+@app.post('/api/servers/{server_id}/telemt/exit-link', tags=["Protocols"])
-+async def api_telemt_exit_link(request: Request, server_id: int):
-+    """Route only this Telemt container through an already-linked AWG instance."""
-+    if not _check_admin(request):
-+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
-+    try:
-+        body = await request.json()
-+        protocol = str(body.get('protocol') or 'telemt')
-+        awg_protocol = str(body.get('awg_protocol') or '')
-+        data = load_data()
-+        if not 0 <= server_id < len(data.get('servers') or []):
-+            return JSONResponse({'error': 'Server not found'}, status_code=404)
-+        server = data['servers'][server_id]
-+        result = await asyncio.to_thread(
-+            TelemtExitService(get_ssh).link, server, protocol, awg_protocol)
-+        async with DATA_LOCK:
-+            data = load_data()
-+            record = (data['servers'][server_id].setdefault('protocols', {})).setdefault(protocol, {})
-+            record['telemt_exit'] = result
-+            save_data(data)
-+        return {'status': 'success', 'telemt_exit': result}
-+    except Exception as e:
-+        logger.exception("Error linking Telemt through AWG Exit Node")
-+        return JSONResponse({'error': str(e)}, status_code=400)
-+
-+
-+@app.post('/api/servers/{server_id}/telemt/exit-link/remove', tags=["Protocols"])
-+async def api_telemt_exit_unlink(request: Request, server_id: int):
-+    """Restore direct Telemt egress and remove its policy-routing rules."""
-+    if not _check_admin(request):
-+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
-+    try:
-+        body = await request.json()
-+        protocol = str(body.get('protocol') or 'telemt')
-+        data = load_data()
-+        if not 0 <= server_id < len(data.get('servers') or []):
-+            return JSONResponse({'error': 'Server not found'}, status_code=404)
-+        server = data['servers'][server_id]
-+        result = await asyncio.to_thread(
-+            TelemtExitService(get_ssh).unlink, server, protocol)
-+        async with DATA_LOCK:
-+            data = load_data()
-+            record = (data['servers'][server_id].get('protocols') or {}).get(protocol) or {}
-+            record.pop('telemt_exit', None)
-+            save_data(data)
-+        return {'status': 'success', 'telemt_exit': result}
-+    except Exception as e:
-+        logger.exception("Error unlinking Telemt from AWG Exit Node")
-+        return JSONResponse({'error': str(e)}, status_code=400)
  @app.post('/api/servers/{server_id}/exit-link', tags=["Protocols"])
  @serialize_peer_lifecycle
-@@ -8063,8 +8181,9 @@
+@@ -8063,8 +8182,9 @@
      'telemt': 'telemt',
      'dns': 'amnezia-dns',
      'wireguard': 'amnezia-wireguard',
@@ -369,7 +294,7 @@
      'nginx': 'amnezia-nginx',
  }
  
-@@ -8676,9 +8795,9 @@
+@@ -8676,9 +8796,9 @@
  # Public ports are published on the box itself: UDP for the WireGuard family,
  # TCP for the rest. DNS resolvers and the exit node have nothing to publish.
  PUBLIC_FORWARD_L4 = {
@@ -380,7 +305,7 @@
  
  # Seconds before the startup re-apply touches SSH, so the panel is serving
  # first. Patched to 0 in tests.
-@@ -10102,13 +10221,30 @@
+@@ -10102,13 +10222,30 @@
          ssh = await asyncio.to_thread(get_ssh, server)
          await asyncio.to_thread(ssh.connect)
          manager = get_protocol_manager(ssh, req.protocol)
@@ -414,7 +339,7 @@
          else:
              # Create new client
              if protocol_base(req.protocol) == 'telemt':
-@@ -10134,14 +10270,20 @@
+@@ -10134,14 +10271,20 @@
                  'protocol': req.protocol,
                  'client_id': result['client_id'],
                  'name': req.name,
@@ -436,7 +361,7 @@
              resp['config'] = result['config']
              resp.update(config_payloads(result['config'], server, req.protocol))
          return resp
-@@ -10828,9 +10970,13 @@
+@@ -10828,9 +10971,13 @@
          return JSONResponse({'error': 'Selected SSH jump host is no longer available'},
                              status_code=400)
      previous_jump_uid = ((settings.get('ssh_jump') or {}).get('jump_host_uid') or '')
@@ -450,7 +375,7 @@
      settings['mail'] = merge_mail_settings(settings.get('mail'), payload.mail.dict())
  
      # Panel access control: validate the list before storing anything, so a
-@@ -10912,9 +11058,9 @@
+@@ -10912,9 +11059,9 @@
      tg_cfg = payload.telegram
      if tg_cfg.enabled and tg_cfg.token:
          if not tg_bot.is_running():
@@ -461,7 +386,7 @@
          if tg_bot.is_running():
              logger.info("Stopping Telegram bot (settings save)...")
              asyncio.create_task(tg_bot.stop_bot())
-@@ -11096,9 +11242,9 @@
+@@ -11096,9 +11243,9 @@
          data['settings']['telegram'] = tg_cfg
          save_data(data)
          return {'status': 'stopped', 'bot_running': False}
@@ -476,8 +401,3 @@
 
 --- a/app.py
 +++ b/app.py
-@@ -92,3 +92,4 @@
- from exit_link_service import ExitLinkError, ExitLinkService
-+from telemt_exit_service import TelemtExitService
- from smartroute_service import SmartRouteError, SmartRouteService, split_instances
- from warp_service import (
