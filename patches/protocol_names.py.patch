@@ -6,6 +6,6 @@
          'xray': 'Xray', 'telemt': 'Telemt', 'dns': 'AmneziaDNS',
 -        'wireguard': 'WireGuard', 'socks5': 'SOCKS5', 'adguard': 'AdGuard Home',
 +        'wireguard': 'WireGuard', 'socks5': 'SOCKS5', 'http_proxy': 'HTTP Proxy', 'adguard': 'AdGuard Home',
-         'nginx': 'NGINX', 'exit': 'Exit Node',
+         'nginx': 'NGINX', 'haproxy': 'HAProxy', 'exit': 'Exit Node',
      }
      name = names.get(base, base)
