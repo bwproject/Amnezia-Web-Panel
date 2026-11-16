@@ -3,9 +3,9 @@
 @@ -60,10 +60,13 @@
      stage_step as awg_plugin_stage_step,
  )
-+from managers.wireguard_manager import WireGuardManager
 +from managers.wireguard_exit_manager import WireGuardExitManager
 +from bw_exit_manager import BWExitManager
+ from managers.wireguard_manager import WireGuardManager
  from managers.backup_manager import BackupManager
  import telegram_bot as tg_bot
 +from telegram_exit_transport import TelegramExitHTTPClient
