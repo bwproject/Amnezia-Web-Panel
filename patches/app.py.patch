@@ -21,7 +21,7 @@
  
  
  def backfill_server_uids(servers) -> bool:
-@@ -1471,8 +1474,9 @@
+@@ -1531,9 +1534,10 @@
          'telemt': 'telemt',
          'dns': 'amnezia-dns',
          'wireguard': 'amnezia-wireguard',
@@ -29,6 +29,7 @@
 +        'http_proxy': 'http-proxy',
          'adguard': 'amnezia-adguard',
          'nginx': 'amnezia-nginx',
+         'haproxy': 'amnezia-haproxy',
          'exit': 'amnezia-exit',
      }
 @@ -1502,8 +1506,11 @@
