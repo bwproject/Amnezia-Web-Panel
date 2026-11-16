@@ -294,14 +294,14 @@
      'haproxy': 'amnezia-haproxy',
  }
  
-@@ -11029,5 +11037,5 @@
+@@ -8676,5 +8796,5 @@
  PUBLIC_FORWARD_L4 = {
      'udp': ('awg', 'awg2', 'awg3', 'awg_legacy', 'wireguard'),
 -    'tcp': ('xray', 'telemt', 'socks5', 'nginx'),
 +    'tcp': ('xray', 'telemt', 'socks5', 'http_proxy', 'nginx'),
      'haproxy': 'tcp',
  }
-@@ -12671,11 +12679,28 @@
+@@ -10102,11 +10222,28 @@
          manager = get_protocol_manager(ssh, req.protocol)
          
 +        config_available = True
