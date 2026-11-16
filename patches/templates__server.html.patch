@@ -28,9 +28,7 @@
      <!-- SOCKS5 Card -->
      <div class="card card-hover protocol-card protocol-socks5" id="proto-socks5">
          <div class="protocol-card-head">
-@@ -1938,6 +1959,18 @@
-                     <div class="form-hint">{{ _('exit_obfuscation_hint') }}</div>
-                 </div>
+@@ -1938,3 +1959,15 @@
              </div>
 +            <div id="httpProxyOptions"
 +                style="display:none; padding: var(--space-md); background: rgba(0,0,0,0.03); border-radius: var(--radius-md); margin-bottom: var(--space-md);">
@@ -46,7 +44,6 @@
 +            </div>
              <div id="socks5Options"
                  style="display:none; padding: var(--space-md); background: rgba(0,0,0,0.03); border-radius: var(--radius-md); margin-bottom: var(--space-md);">
-                 <div class="form-group">
 @@ -2371,6 +2404,35 @@
      </div>
  </div>
@@ -91,24 +88,12 @@
          { proto: 'exit', category: 'services', icon: '🚪', title: 'Exit Node', descKey: 'exit_desc', badge: 'NEW' },
          { proto: 'smartroute', category: 'services', icon: '🧭', title: 'Smart Route', descKey: 'smartroute_desc', badge: 'NEW' },
          { proto: 'warp', category: 'services', icon: '☁️', title: 'Cloudflare WARP', descKey: 'srv_warp_card_desc' },
-@@ -2928,7 +2991,7 @@
-                                             </div>
-                                         </div>
-                                     </div>
+@@ -2928,1 +2991,1 @@
 -                                    <div class="marketplace-app-desc">${_(app.descKey)}</div>
 +                                    <div class="marketplace-app-desc">${app.desc || _(app.descKey)}</div>
-                                     <button class="btn ${installed && !canInstallAnother ? 'btn-secondary' : 'btn-primary'} btn-sm" ${action}>
-                                         ${isSmart ? _('smartroute_open') : (canInstallAnother ? _('install_another') : (installed ? _('installed') : _('install')))}
-                                     </button>
-@@ -3903,7 +3966,7 @@
- 
-     // Services that don't have per-user "connections" — they expose a single
-     // shared endpoint (DNS/proxy/admin UI) rather than per-client configs.
+@@ -3903,1 +3966,1 @@
 -    const SERVICE_PROTOS = ['dns', 'socks5', 'adguard', 'nginx', 'exit'];
-+    const SERVICE_PROTOS = ['dns', 'socks5', 'http_proxy', 'adguard', 'nginx', 'exit'];
- 
-     function buildServiceInfoGrid(proto, info) {
-         // Custom info-grid markup for non-VPN services. Returns HTML for the grid body.
++    const SERVICE_PROTOS = ['dns', 'socks5', 'http_proxy', 'adguard', 'nginx', 'haproxy', 'exit'];
 @@ -3911,11 +3974,12 @@
          if (base === 'dns') {
              return `<div class="protocol-info-item"><span class="protocol-info-label">${_('port')}</span><span class="protocol-info-value">172.29.172.254:53 (Internal)</span></div>`;
@@ -141,15 +126,11 @@
                      <button class="btn btn-secondary btn-sm" onclick="openSocks5Settings('${proto}')" style="flex:1">${_('socks5_change_settings')}</button>
                      <button class="btn btn-secondary btn-sm" onclick="showProtocolBackups('${proto}')">${_('backup')}</button>
                      <button class="btn btn-danger btn-sm" onclick="uninstallProtocol('${proto}')">${_('uninstall')}</button>
-@@ -4099,7 +4169,7 @@
-                     const awgBtn = AWG_PROTOCOLS.includes(protoBase(proto))
-                         ? `<button class="btn btn-secondary btn-sm" onclick="openAwgSettings('${proto}')" title="${_('awg_settings_title')}">${_('awg_settings_btn')}</button>`
+@@ -4099,3 +4169,3 @@
+                     const exitBtn = AWG_PROTOCOLS.includes(protoBase(proto))
+-                        ? `<button class="btn btn-secondary btn-sm exit-link-btn" onclick="openExitLinkModal('${proto}')" title="${_('exit_link_title')}">🚪${info.exit_link ? ' ' + escapeHtml(info.exit_link.exit_name || '') + smartRouteMark(info.exit_link) : ''}</button>`
++                        ? `<button class="btn btn-secondary btn-sm exit-link-btn" onclick="openExitLinkModal('${proto}')" title="${_('exit_link_title')}">🚪${info.exit_link ? ' ' + escapeHtml(info.exit_link.exit_name || '') + smartRouteMark(info.exit_link) : ''}</button>`
                          : '';
--                    const exitBtn = AWG_PROTOCOLS.includes(protoBase(proto))
-+                    const exitBtn = (AWG_PROTOCOLS.includes(protoBase(proto)) || protoBase(proto) === 'wireguard')
-                         ? `<button class="btn btn-secondary btn-sm" onclick="openExitLinkModal('${proto}')" title="${_('exit_link_title')}">🚪${info.exit_link ? ' ' + escapeHtml(info.exit_link.exit_name || '') : ''}</button>`
-                         : '';
-                     const ep = PUBLIC_ENDPOINTS[proto];
 @@ -4648,6 +4718,7 @@
          const portHint = document.getElementById('installPortHint');
          const telemtOpts = document.getElementById('telemtOptions');
