@@ -4,6 +4,8 @@ on:
   push:
     branches: [ "main" ]
     paths-ignore:
+      - '.github/workflows/build.yml'
+      - '.github/workflows/test.yml'
       - '.github/workflows/upstream-sync.yml'
       - '.github/workflows/sync-bw.yml'
       - '.github/workflows/build-bw-package.yml'
