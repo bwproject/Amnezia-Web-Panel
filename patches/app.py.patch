@@ -283,7 +283,7 @@
 +
  @app.post('/api/servers/{server_id}/exit-link', tags=["Protocols"])
  @serialize_peer_lifecycle
-@@ -8063,8 +8182,9 @@
+@@ -10040,9 +10047,10 @@
      'telemt': 'telemt',
      'dns': 'amnezia-dns',
      'wireguard': 'amnezia-wireguard',
@@ -291,6 +291,7 @@
 +    'http_proxy': 'http-proxy',
      'adguard': 'amnezia-adguard',
      'nginx': 'amnezia-nginx',
+     'haproxy': 'amnezia-haproxy',
  }
  
 @@ -8676,9 +8796,9 @@
