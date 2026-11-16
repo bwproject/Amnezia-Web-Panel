@@ -10,7 +10,7 @@
 +from telegram_exit_transport import TelegramExitHTTPClient
  
  from exit_link_service import ExitLinkError, ExitLinkService
-@@ -1453,9 +1456,9 @@
+@@ -1389,9 +1392,9 @@
          await asyncio.sleep(0.5)
      return get_tunnel_status(provider)
  
@@ -21,7 +21,7 @@
  
  
  def backfill_server_uids(servers) -> bool:
-@@ -1531,9 +1534,10 @@
+@@ -1471,9 +1474,10 @@
          'telemt': 'telemt',
          'dns': 'amnezia-dns',
          'wireguard': 'amnezia-wireguard',
@@ -44,7 +44,7 @@
          from managers.adguard_manager import AdguardManager
          return AdguardManager(ssh)
      elif base == 'nginx':
-@@ -1755,9 +1759,10 @@
+@@ -1665,9 +1672,10 @@
          'wireguard': 'WG',
          'xray': 'Xray',
          'telemt': 'Telemt',
@@ -129,7 +129,7 @@
  
  def _auto_backup_due(auto_backup: dict, now: Optional[datetime] = None) -> bool:
      if not auto_backup.get('enabled'):
-@@ -7580,10 +7586,10 @@
+@@ -6118,10 +6138,10 @@
  # mapped to their transport. dns/adguard are skipped (internal bindings).
  INSTALL_PORT_TRANSPORT = {
      'awg': 'udp', 'awg2': 'udp', 'awg3': 'udp', 'awg_legacy': 'udp',
@@ -283,7 +283,7 @@
 +
  @app.post('/api/servers/{server_id}/exit-link', tags=["Protocols"])
  @serialize_peer_lifecycle
-@@ -10040,9 +10047,10 @@
+@@ -8063,9 +8182,10 @@
      'telemt': 'telemt',
      'dns': 'amnezia-dns',
      'wireguard': 'amnezia-wireguard',
