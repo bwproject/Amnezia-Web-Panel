@@ -1,9 +1,13 @@
 name: Assemble BW from main + imp
 
 on:
-  push:
+  workflow_run:
+    workflows:
+      - Sync main with upstream
+    types:
+      - completed
     branches:
-      - imp
+      - main
   workflow_dispatch:
 
 permissions:
@@ -16,6 +20,7 @@ concurrency:
 
 jobs:
   assemble:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     name: Apply imp overlay and update BW
     runs-on: ubuntu-latest
     timeout-minutes: 40
