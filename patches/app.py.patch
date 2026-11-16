@@ -3,8 +3,7 @@
 @@ -60,10 +60,13 @@
      stage_step as awg_plugin_stage_step,
  )
- from managers.xray_manager import XrayManager
- from managers.wireguard_manager import WireGuardManager
++from managers.wireguard_manager import WireGuardManager
 +from managers.wireguard_exit_manager import WireGuardExitManager
 +from bw_exit_manager import BWExitManager
  from managers.backup_manager import BackupManager
