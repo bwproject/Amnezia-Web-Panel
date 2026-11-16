@@ -6,8 +6,6 @@ on:
       - Sync main with upstream
     types:
       - completed
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
