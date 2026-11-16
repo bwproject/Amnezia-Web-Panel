@@ -1,0 +1,101 @@
+name: Assemble BW from main + imp
+
+on:
+  push:
+    branches:
+      - imp
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+  actions: write
+
+concurrency:
+  group: assemble-bw
+  cancel-in-progress: false
+
+jobs:
+  assemble:
+    name: Apply imp overlay and update BW
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout upstream-synced main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: upstream
+          fetch-depth: 1
+
+      - name: Checkout ProjectBW overlay
+        uses: actions/checkout@v4
+        with:
+          ref: imp
+          path: overlay
+          fetch-depth: 1
+
+      - name: Apply ProjectBW modules and patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -D overlay/bw_exit_manager.py upstream/bw_exit_manager.py
+          install -D overlay/bw_wg_awg_transport.py upstream/bw_wg_awg_transport.py
+          install -D overlay/telegram_exit_transport.py upstream/telegram_exit_transport.py
+          install -D overlay/managers/wireguard_exit_manager.py upstream/managers/wireguard_exit_manager.py
+          install -D overlay/managers/http_proxy_manager.py upstream/managers/http_proxy_manager.py
+          shopt -s nullglob
+          patches=(overlay/patches/*.patch)
+          if [ ${#patches[@]} -eq 0 ]; then
+            echo "No integration patches found"
+            exit 1
+          fi
+          for patch in "${patches[@]}"; do
+            echo "::group::Apply ${patch}"
+            git -C upstream apply --check "$GITHUB_WORKSPACE/$patch"
+            git -C upstream apply "$GITHUB_WORKSPACE/$patch"
+            echo "::endgroup::"
+          done
+          git -C upstream diff --check
+
+      - name: Validate integrated Python files
+        run: |
+          python -m py_compile \
+            upstream/app.py \
+            upstream/exit_link_service.py \
+            upstream/smartroute_service.py \
+            upstream/telegram_bot.py \
+            upstream/telegram_exit_transport.py \
+            upstream/bw_exit_manager.py \
+            upstream/bw_wg_awg_transport.py \
+            upstream/managers/http_proxy_manager.py \
+            upstream/managers/wireguard_exit_manager.py
+
+      - name: Checkout generated BW branch
+        uses: actions/checkout@v4
+        with:
+          ref: BW
+          path: bw
+          fetch-depth: 1
+
+      - name: Assemble complete BW source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rsync -a --delete --exclude='.git' upstream/ bw/
+          install -D overlay/.github/workflows/build-bw-package.yml bw/.github/workflows/build-bw-package.yml
+          cd bw
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "BW already matches main + imp"
+          else
+            git commit -m "Build BW from main + imp"
+            git push origin HEAD:BW
+          fi
+
+      - name: Start BW package build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run build-bw-package.yml --ref BW

@@ -1,0 +1,64 @@
+name: Sync main with upstream
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/upstream-sync.yml
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: upstream-main-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Check PRVTPRO upstream and refresh main
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout ProjectBW main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compare and merge upstream main
+        id: sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/PRVTPRO/Amnezia-Web-Panel.git
+          git fetch upstream main
+          before="$(git rev-parse HEAD)"
+          upstream_head="$(git rev-parse upstream/main)"
+          if git merge-base --is-ancestor "$upstream_head" HEAD; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "main already contains the latest upstream commit: $upstream_head"
+            exit 0
+          fi
+          git merge --no-edit upstream/main
+          git push origin HEAD:main
+          after="$(git rev-parse HEAD)"
+          if [ "$before" != "$after" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Updated main to include upstream commit $upstream_head"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Trigger overlay assembly
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run sync-bw.yml --ref imp
