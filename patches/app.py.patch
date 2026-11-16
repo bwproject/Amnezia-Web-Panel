@@ -44,7 +44,7 @@
          from managers.adguard_manager import AdguardManager
          return AdguardManager(ssh)
      elif base == 'nginx':
-@@ -1665,8 +1672,9 @@
+@@ -1755,9 +1759,10 @@
          'wireguard': 'WG',
          'xray': 'Xray',
          'telemt': 'Telemt',
@@ -53,6 +53,7 @@
          'dns': 'DNS',
          'adguard': 'AdGuard',
          'nginx': 'NGINX',
+         'haproxy': 'HAProxy',
          'exit': 'Exit',
 @@ -2038,18 +2046,19 @@
                          status_code=exc.status_code)
