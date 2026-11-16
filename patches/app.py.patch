@@ -294,7 +294,7 @@
      'haproxy': 'amnezia-haproxy',
  }
  
-@@ -8676,5 +8796,5 @@
+@@ -8676,4 +8796,4 @@
  PUBLIC_FORWARD_L4 = {
      'udp': ('awg', 'awg2', 'awg3', 'awg_legacy', 'wireguard'),
 -    'tcp': ('xray', 'telemt', 'socks5', 'nginx', 'haproxy'),
