@@ -129,13 +129,14 @@
  
  def _auto_backup_due(auto_backup: dict, now: Optional[datetime] = None) -> bool:
      if not auto_backup.get('enabled'):
-@@ -6118,9 +6138,9 @@
+@@ -7580,10 +7586,10 @@
  # mapped to their transport. dns/adguard are skipped (internal bindings).
  INSTALL_PORT_TRANSPORT = {
      'awg': 'udp', 'awg2': 'udp', 'awg3': 'udp', 'awg_legacy': 'udp',
      'wireguard': 'udp', 'exit': 'udp',
 -    'xray': 'tcp', 'telemt': 'tcp', 'socks5': 'tcp', 'nginx': 'tcp',
 +    'xray': 'tcp', 'telemt': 'tcp', 'socks5': 'tcp', 'http_proxy': 'tcp', 'nginx': 'tcp',
+     'haproxy': 'tcp',
  }
  
  
