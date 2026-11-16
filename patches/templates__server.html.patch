@@ -127,9 +127,9 @@
                      <button class="btn btn-secondary btn-sm" onclick="showProtocolBackups('${proto}')">${_('backup')}</button>
                      <button class="btn btn-danger btn-sm" onclick="uninstallProtocol('${proto}')">${_('uninstall')}</button>
 @@ -4099,3 +4169,3 @@
-                     const exitBtn = AWG_PROTOCOLS.includes(protoBase(proto))
--                        ? `<button class="btn btn-secondary btn-sm exit-link-btn" onclick="openExitLinkModal('${proto}')" title="${_('exit_link_title')}">🚪${info.exit_link ? ' ' + escapeHtml(info.exit_link.exit_name || '') + smartRouteMark(info.exit_link) : ''}</button>`
-+                        ? `<button class="btn btn-secondary btn-sm exit-link-btn" onclick="openExitLinkModal('${proto}')" title="${_('exit_link_title')}">🚪${info.exit_link ? ' ' + escapeHtml(info.exit_link.exit_name || '') + smartRouteMark(info.exit_link) : ''}</button>`
+-                    const exitBtn = AWG_PROTOCOLS.includes(protoBase(proto))
++                    const exitBtn = (AWG_PROTOCOLS.includes(protoBase(proto)) || protoBase(proto) === 'wireguard')
+                         ? `<button class="btn btn-secondary btn-sm exit-link-btn" onclick="openExitLinkModal('${proto}')" title="${_('exit_link_title')}">🚪${info.exit_link ? ' ' + escapeHtml(info.exit_link.exit_name || '') + smartRouteMark(info.exit_link) : ''}</button>`
                          : '';
 @@ -4648,6 +4718,7 @@
          const portHint = document.getElementById('installPortHint');
