@@ -41,7 +41,7 @@ jobs:
           if git merge-base --is-ancestor "$upstream_head" HEAD; then
             echo "main already contains latest upstream commit: $upstream_head"
           else
-            git merge --no-edit upstream/main
+            git merge --ff-only upstream/main
             git push origin HEAD:main
             echo "main updated with upstream commit $upstream_head"
           fi
