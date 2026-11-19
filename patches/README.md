@@ -9,9 +9,11 @@ This directory contains only the focused diffs against the current `main` branch
 | `protocol_names.py.patch` | Protocol display-name adjustment |
 | `smartroute_service.py.patch` | Route standard WireGuard Smart Route operations through the BW manager |
 | `telegram_bot.py.patch` | Inject the Telegram HTTP client factory |
+| `templates__my_connections.html.patch` | Hide config actions when an external AWG peer has no stored private key |
+| `templates__users.html.patch` | Show unavailable AWG configs when a peer's private key is not stored on the server |
 | `templates__server.html.patch` | HTTP proxy controls and WireGuard Exit Node UI |
 | `templates__settings.html.patch` | Telegram Exit Node selector |
 
-The additive BW-only modules live beside the patch directory and under `managers/`. Telemt itself is taken directly from upstream `main` without BW-specific modifications. The workflow in `.github/workflows/sync-bw.yml` checks out `main`, copies those modules, applies every patch with `git apply --check`, validates Python syntax, then updates `BW` and builds the Docker image.
+The additive BW-only modules live beside the patch directory and under `managers/`. Telegram Exit Node SSH sessions use the panel's `_ssh_manager_for` factory so encrypted credentials, jump hosts and lifecycle fences remain active. Telemt itself is taken directly from the official upstream release without BW-specific modifications. The workflow in `.github/workflows/sync-bw.yml` checks out `main`, copies those modules, applies every patch with `git apply --check`, validates Python syntax, then updates `BW` and builds the Docker image.
 
-When upstream changes, update patches against the new `main` and run the workflow manually from `imp`. Never copy a complete upstream file into this directory.
+When upstream changes, update patches against the new official stable release and run the workflow from `imp`. Never copy a complete upstream file into this directory.

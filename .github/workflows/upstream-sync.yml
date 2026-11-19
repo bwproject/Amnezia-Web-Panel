@@ -29,21 +29,37 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compare and merge upstream main
+      - name: Compare and merge latest official stable release
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/PRVTPRO/Amnezia-Web-Panel.git
-          git fetch upstream main
-          upstream_head="$(git rev-parse upstream/main)"
-          if git merge-base --is-ancestor "$upstream_head" HEAD; then
-            echo "main already contains latest upstream commit: $upstream_head"
+          release_json="$(gh api repos/PRVTPRO/Amnezia-Web-Panel/releases/latest)"
+          release_tag="$(jq -r '.tag_name // empty' <<<"$release_json")"
+          if [[ -z "$release_tag" ]] || [[ "$(jq -r '.draft' <<<"$release_json")" != "false" ]] || [[ "$(jq -r '.prerelease' <<<"$release_json")" != "false" ]]; then
+            echo "Latest upstream release is not a published stable release"
+            exit 1
+          fi
+          if [[ ! "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Unexpected upstream stable tag: $release_tag"
+            exit 1
+          fi
+          git fetch --no-tags upstream "refs/tags/${release_tag}"
+          release_head="$(git rev-parse "FETCH_HEAD^{commit}")"
+          if git merge-base --is-ancestor "$release_head" HEAD; then
+            echo "main already contains latest official stable release: $release_tag ($release_head)"
           else
-            git merge --ff-only upstream/main
+            if ! git merge-base --is-ancestor HEAD "$release_head"; then
+              echo "Refusing to move main: $release_tag is not a fast-forward from $(git rev-parse HEAD)"
+              exit 1
+            fi
+            git merge --ff-only "$release_head"
             git push origin HEAD:main
-            echo "main updated with upstream commit $upstream_head"
+            echo "main updated to official stable release $release_tag ($release_head)"
           fi
 
       - name: Trigger overlay assembly

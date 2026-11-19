@@ -124,7 +124,7 @@
      if tg_cfg.get('enabled') and tg_cfg.get('token'):
          logger.info("Starting Telegram bot from saved settings...")
 -        tg_bot.launch_bot(tg_cfg['token'], load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, credential_resolver=lambda server: _credential_store().resolve(server))
-+        tg_bot.launch_bot(tg_cfg['token'], load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, credential_resolver=lambda server: _credential_store().resolve(server), http_client_factory=lambda: TelegramExitHTTPClient(load_data))
++        tg_bot.launch_bot(tg_cfg['token'], load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, credential_resolver=lambda server: _credential_store().resolve(server), http_client_factory=lambda: TelegramExitHTTPClient(load_data, ssh_factory=lambda server: _ssh_manager_for(server, load_data())))
  
  
  def _auto_backup_due(auto_backup: dict, now: Optional[datetime] = None) -> bool:
@@ -333,7 +333,7 @@
          else:
              # Create new client
              if protocol_base(req.protocol) == 'telemt':
-@@ -10134,14 +10271,20 @@
+@@ -10134,5 +10271,7 @@
                  'protocol': req.protocol,
                  'client_id': result['client_id'],
                  'name': req.name,
@@ -341,10 +341,7 @@
 +                'config_available': config_available,
 +                'external_client': not config_available,
              }
-             data = load_data()
-             data['user_connections'].append(conn)
-             save_data(data)
- 
+@@ -10154,5 +10288,10 @@
 -        resp = {'status': 'success'}
 +        resp = {'status': 'success', 'config_available': config_available}
 +        if not config_available:
@@ -375,7 +372,7 @@
          if not tg_bot.is_running():
              logger.info("Starting Telegram bot (settings save)...")
 -            tg_bot.launch_bot(tg_cfg.token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, credential_resolver=lambda server: _credential_store().resolve(server))
-+            tg_bot.launch_bot(tg_cfg.token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, credential_resolver=lambda server: _credential_store().resolve(server), http_client_factory=lambda: TelegramExitHTTPClient(load_data))
++            tg_bot.launch_bot(tg_cfg.token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, credential_resolver=lambda server: _credential_store().resolve(server), http_client_factory=lambda: TelegramExitHTTPClient(load_data, ssh_factory=lambda server: _ssh_manager_for(server, load_data())))
      else:
          if tg_bot.is_running():
              logger.info("Stopping Telegram bot (settings save)...")
@@ -386,7 +383,7 @@
          return {'status': 'stopped', 'bot_running': False}
      else:
 -        tg_bot.launch_bot(token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, credential_resolver=lambda server: _credential_store().resolve(server))
-+        tg_bot.launch_bot(token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, credential_resolver=lambda server: _credential_store().resolve(server), http_client_factory=lambda: TelegramExitHTTPClient(load_data))
++        tg_bot.launch_bot(token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, credential_resolver=lambda server: _credential_store().resolve(server), http_client_factory=lambda: TelegramExitHTTPClient(load_data, ssh_factory=lambda server: _ssh_manager_for(server, load_data())))
          tg_cfg['enabled'] = True
          data['settings']['telegram'] = tg_cfg
          save_data(data)
