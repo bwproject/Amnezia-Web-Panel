@@ -33,8 +33,9 @@ def _safe_multipart_header(value):
 class TelegramExitHTTPClient:
     """httpx-compatible client that uses the selected Exit Node or direct HTTP."""
 
-    def __init__(self, load_data_fn):
+    def __init__(self, load_data_fn, ssh_factory=None):
         self._load_data = load_data_fn
+        self._ssh_factory = ssh_factory
         self._direct = httpx.AsyncClient()
         # A dedicated SSH connection keeps Telegram long-polling from holding
         # the panel's shared per-server SSH command lock for up to 35 seconds.
@@ -162,9 +163,13 @@ class TelegramExitHTTPClient:
         )
 
     def _dedicated_ssh(self, server):
+        credentials_revision = json.dumps(
+            server.get("ssh_credentials") or {}, sort_keys=True, separators=(",", ":")
+        )
         key = (
             server.get("uid"), server.get("host"), int(server.get("ssh_port", 22)),
-            server.get("username"), server.get("password"), server.get("private_key"),
+            server.get("username"), credentials_revision,
+            server.get("password"), server.get("private_key"),
         )
         with self._ssh_lock:
             if self._ssh_key != key:
@@ -176,14 +181,19 @@ class TelegramExitHTTPClient:
                 self._ssh_session = None
                 self._ssh_key = key
             if self._ssh_session is None:
-                self._ssh_session = SSHManager(
-                    host=server["host"],
-                    port=server.get("ssh_port", 22),
-                    username=server["username"],
-                    password=server.get("password"),
-                    private_key=server.get("private_key"),
-                    connect_cooldown_base=float(server.get("ssh_cooldown_base") or 30),
-                )
+                if self._ssh_factory is not None:
+                    # Use the panel's credential store, jump-host resolver and
+                    # lifecycle-fence identity while keeping a dedicated session.
+                    self._ssh_session = self._ssh_factory(server)
+                else:
+                    self._ssh_session = SSHManager(
+                        host=server["host"],
+                        port=server.get("ssh_port", 22),
+                        username=server["username"],
+                        password=server.get("password"),
+                        private_key=server.get("private_key"),
+                        connect_cooldown_base=float(server.get("ssh_cooldown_base") or 30),
+                    )
                 self._ssh_session.connect()
             else:
                 self._ssh_session.ensure_connected()
