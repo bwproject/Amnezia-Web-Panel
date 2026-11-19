@@ -341,7 +341,7 @@
 +                'config_available': config_available,
 +                'external_client': not config_available,
              }
-@@ -10154,5 +10288,10 @@
+@@ -10154,5 +10288,9 @@
 -        resp = {'status': 'success'}
 +        resp = {'status': 'success', 'config_available': config_available}
 +        if not config_available:
