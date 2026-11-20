@@ -352,43 +352,29 @@
              resp['config'] = result['config']
              resp.update(config_payloads(result['config'], server, req.protocol))
          return resp
-@@ -10828,9 +10971,13 @@
-         return JSONResponse({'error': 'Selected SSH jump host is no longer available'},
-                             status_code=400)
+@@ -14313,8 +14313,12 @@
      previous_jump_uid = ((settings.get('ssh_jump') or {}).get('jump_host_uid') or '')
      settings['ssh_jump'] = {'jump_host_uid': jump_host_uid}
 +    telegram_exit_uid = (payload.telegram.exit_uid or '').strip()
 +    if telegram_exit_uid and not any(n.get('uid') == telegram_exit_uid for n in exit_link_svc.list_exit_nodes(data)):
 +        return JSONResponse({'error': 'telegram_exit_not_available'}, status_code=400)
+     previous_telegram = dict(settings.get('telegram') or {})
      settings['telegram'] = payload.telegram.dict()
+     # Only the lifecycle endpoint changes intent. Old/stale settings pages may
+     # still submit enabled based on runtime state; never let that disable boot.
+     settings['telegram']['enabled'] = bool(previous_telegram.get('enabled'))
 +    settings['telegram']['exit_uid'] = telegram_exit_uid
      settings['ssl'] = payload.ssl.dict()
-     settings['mail'] = merge_mail_settings(settings.get('mail'), payload.mail.dict())
- 
-     # Panel access control: validate the list before storing anything, so a
-@@ -10912,9 +11059,9 @@
-     tg_cfg = payload.telegram
-     if tg_cfg.enabled and tg_cfg.token:
-         if not tg_bot.is_running():
-             logger.info("Starting Telegram bot (settings save)...")
--            tg_bot.launch_bot(tg_cfg.token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, credential_resolver=lambda server: _credential_store().resolve(server))
-+            tg_bot.launch_bot(tg_cfg.token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, credential_resolver=lambda server: _credential_store().resolve(server), http_client_factory=lambda: TelegramExitHTTPClient(load_data, ssh_factory=lambda server: _ssh_manager_for(server, load_data())))
-     else:
-         if tg_bot.is_running():
-             logger.info("Stopping Telegram bot (settings save)...")
-             asyncio.create_task(tg_bot.stop_bot())
-@@ -11096,9 +11243,9 @@
-         data['settings']['telegram'] = tg_cfg
+@@ -14402,2 +14402,2 @@
+     if tg_cfg['enabled'] and tg_cfg.get('token') and not tg_bot.is_running():
+-        tg_bot.launch_bot(tg_cfg['token'], load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, credential_resolver=lambda server: _credential_store().resolve(server))
++        tg_bot.launch_bot(tg_cfg['token'], load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, credential_resolver=lambda server: _credential_store().resolve(server), http_client_factory=lambda: TelegramExitHTTPClient(load_data, ssh_factory=lambda server: _ssh_manager_for(server, load_data())))
+@@ -14581,7 +14581,7 @@
+         tg_cfg['enabled'] = enabled
          save_data(data)
-         return {'status': 'stopped', 'bot_running': False}
-     else:
--        tg_bot.launch_bot(token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, credential_resolver=lambda server: _credential_store().resolve(server))
-+        tg_bot.launch_bot(token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, credential_resolver=lambda server: _credential_store().resolve(server), http_client_factory=lambda: TelegramExitHTTPClient(load_data, ssh_factory=lambda server: _ssh_manager_for(server, load_data())))
-         tg_cfg['enabled'] = True
-         data['settings']['telegram'] = tg_cfg
-         save_data(data)
-         return {'status': 'started', 'bot_running': True}
-
-
---- a/app.py
-+++ b/app.py
+         if enabled:
+             if not tg_bot.is_running():
+-                tg_bot.launch_bot(token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, credential_resolver=lambda server: _credential_store().resolve(server))
++                tg_bot.launch_bot(token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, credential_resolver=lambda server: _credential_store().resolve(server), http_client_factory=lambda: TelegramExitHTTPClient(load_data, ssh_factory=lambda server: _ssh_manager_for(server, load_data())))
+         else:
+             await tg_bot.stop_bot()

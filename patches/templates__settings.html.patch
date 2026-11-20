@@ -11,18 +11,16 @@
 +                    <p class="form-hint">Telegram Bot API будет использовать выбранный Exit Node через активную VPN-связку. Если туннель недоступен, запросы не переключаются на прямое соединение.</p>
 +                </div>
                  <div class="row-between" style="margin-top: var(--space-md);">
-@@ -1230,7 +1230,8 @@
+@@ -1404,6 +1411,7 @@
          const telegram = {
              token: document.getElementById('tg_token').value.trim(),
-             enabled: botCurrentlyRunning,
              auto_create_users: document.getElementById('tg_auto_create_users').checked,
              create_users_disabled: document.getElementById('tg_create_users_disabled').checked,
 -            webapp_initdata_auth: document.getElementById('tg_webapp_initdata_auth').checked
 +            webapp_initdata_auth: document.getElementById('tg_webapp_initdata_auth').checked,
 +            exit_uid: document.getElementById('tg_exit_node').value || ''
          };
-@@ -1513,18 +1521,29 @@
- 
+@@ -1780,16 +1788,27 @@
      async function loadExitNodes() {
          const select = document.getElementById('exitDefaultNode');
 +        const telegramSelect = document.getElementById('tg_exit_node');
@@ -31,10 +29,10 @@
          try {
              const data = await (await fetch('/api/exit-nodes')).json();
              (data.exit_nodes || []).forEach(node => {
-+                const label = `${node.name} (${node.host}:${node.port || '?'})`;
++                const label = `${node.name} (${node.host}:${node.port || '?'})`
                  const opt = document.createElement('option');
                  opt.value = node.uid;
--                opt.textContent = `${node.name} (${node.host}:${node.port || '?'})`;
+-                opt.textContent = `${node.name} (${node.host}:${node.port || '?'})`
 +                opt.textContent = label;
                  if (node.uid === current) opt.selected = true;
                  select.appendChild(opt);
@@ -51,4 +49,3 @@
 +            telegramSelect.disabled = true;
          }
      }
- 
