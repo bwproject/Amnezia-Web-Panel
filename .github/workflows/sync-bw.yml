@@ -46,11 +46,18 @@ jobs:
             echo "No integration patches found"
             exit 1
           fi
-          for patch in "${patches[@]}"; do
+          apply_patch() {
+            local patch="$1"
             echo "::group::Apply ${patch}"
             git -C upstream apply --check "$GITHUB_WORKSPACE/$patch"
             git -C upstream apply "$GITHUB_WORKSPACE/$patch"
             echo "::endgroup::"
+          }
+          lifecycle_patch="overlay/patches/app_telegram_lifecycle.patch"
+          apply_patch "$lifecycle_patch"
+          for patch in "${patches[@]}"; do
+            [[ "$patch" == "$lifecycle_patch" ]] && continue
+            apply_patch "$patch"
           done
           git -C upstream diff --check
 
