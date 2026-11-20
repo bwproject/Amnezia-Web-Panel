@@ -5,6 +5,7 @@ This directory contains only the focused diffs against the current `main` branch
 | Patch | Purpose |
 |---|---|
 | `app.py.patch` | Register BW managers, HTTP proxy protocol/API, Telegram Exit Node settings and transport |
+| `app_telegram_lifecycle.patch` | Pass Telegram Exit transport through upstream v1.8.14 settings-save and explicit toggle paths |
 | `exit_link_service.py.patch` | Integrate standard WireGuard with Exit Node management |
 | `protocol_names.py.patch` | Protocol display-name adjustment |
 | `smartroute_service.py.patch` | Route standard WireGuard Smart Route operations through the BW manager |
