@@ -1,5 +1,6 @@
 """Subscription files: path/token handling and the push into the NGINX
 mask html root."""
+import asyncio
 import base64
 import urllib.parse
 import json
@@ -39,17 +40,91 @@ class SubscriptionPathTests(unittest.TestCase):
 
     def test_settings_defaults(self):
         self.assertEqual(panel.subscription_settings({'settings': {}}),
-                         {'enabled': False, 'server_id': None, 'path': 'sub',
+                         {'enabled': False, 'server_uid': None, 'path': 'sub',
                           'name': ''})
 
     def test_nginx_server_requires_an_nginx_protocol(self):
         data = state()
         self.assertIsNotNone(panel.subscription_nginx_server(
-            data, {'enabled': True, 'server_id': 0}))
+            data, {'enabled': True, 'server_uid': 'mask'}))
         self.assertIsNone(panel.subscription_nginx_server(
-            data, {'enabled': True, 'server_id': 1}))
+            data, {'enabled': True, 'server_uid': 'node'}))
         self.assertIsNone(panel.subscription_nginx_server(
-            data, {'enabled': True, 'server_id': 99}))
+            data, {'enabled': True, 'server_uid': 'gone'}))
+
+    def test_legacy_index_settings_migrate_to_uid(self):
+        # Pre-uid settings stored a list index: subscription_settings
+        # resolves it to the server uid in-memory.
+        data = state()
+        data['settings'] = {'subscription': {
+            'enabled': True, 'server_id': 0, 'path': 'sub'}}
+        self.assertEqual(panel.subscription_settings(data)['server_uid'], 'mask')
+        # An out-of-range legacy index resolves to None (no crash).
+        data['settings']['subscription']['server_id'] = 99
+        self.assertIsNone(panel.subscription_settings(data)['server_uid'])
+        # A saved uid takes precedence over any legacy index.
+        data['settings']['subscription']['server_uid'] = 'mask'
+        data['settings']['subscription']['server_id'] = 1
+        self.assertEqual(panel.subscription_settings(data)['server_uid'], 'mask')
+
+
+class UserinfoTests(unittest.TestCase):
+    def test_userinfo_fields(self):
+        user = {'traffic_used': 450, 'traffic_limit': 700,
+                'expiration_date': '2027-01-01T00:00:00'}
+        value = panel._subscription_userinfo(user)
+        self.assertIn('upload=0', value)
+        self.assertIn('download=450', value)
+        self.assertIn('total=700', value)
+        self.assertIn('expire=', value)
+        # expire is a unix timestamp parsed back to the same date
+        expire = int(value.split('expire=')[1])
+        import datetime as dt
+        self.assertEqual(dt.datetime.fromtimestamp(expire).year, 2027)
+
+    def test_userinfo_omits_missing_fields(self):
+        self.assertEqual(panel._subscription_userinfo({}), 'upload=0')
+        self.assertEqual(panel._subscription_userinfo({'traffic_used': 5}),
+                         'upload=0; download=5')
+        # limit 0 means unlimited: no total
+        self.assertEqual(
+            panel._subscription_userinfo({'traffic_used': 5, 'traffic_limit': 0}),
+            'upload=0; download=5')
+        # unparsable expiry is skipped
+        self.assertEqual(
+            panel._subscription_userinfo({'traffic_used': 5,
+                                          'expiration_date': 'garbage'}),
+            'upload=0; download=5')
+
+    def test_nginx_quote_escapes_config_breakers(self):
+        self.assertEqual(panel._nginx_quote('say "hi"'),
+                         'say ' + chr(92) + '"hi' + chr(92) + '"')
+        self.assertEqual(panel._nginx_quote('a' + chr(92) + 'b'),
+                         'a' + chr(92) * 2 + 'b')
+
+    def test_config_block_carries_per_token_userinfo(self):
+        entries = [('t' * 32, 'upload=0; download=450; total=700')]
+        block = panel._subscription_config_block('sub', 'My VPN', entries)
+        self.assertIn('location = /sub/' + 't' * 32, block)
+        self.assertIn('subscription-userinfo "upload=0; download=450; total=700"',
+                      block)
+        self.assertIn('profile-title "My VPN"', block)
+        # generic fallback location still present for unknown tokens
+        self.assertIn('location /sub/', block)
+        # exactly one exact-match location per entry
+        self.assertEqual(block.count('location = /sub/'), 1)
+
+    def test_config_entries_cover_users_with_tokens_and_targets(self):
+        data = state()
+        data['users'][0]['sub_token'] = 't' * 32
+        data['users'][0]['traffic_used'] = 450
+        entries = panel._subscription_config_entries(data)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0][0], 't' * 32)
+        self.assertIn('download=450', entries[0][1])
+        # a user without xray targets is not listed even with a token
+        data['user_connections'] = []
+        self.assertEqual(panel._subscription_config_entries(data), [])
 
 
 class SubscriptionTokenTests(unittest.TestCase):
@@ -91,7 +166,7 @@ class SubscriptionPushTests(unittest.TestCase):
              patch.object(panel, 'xray_fp_kwargs', return_value={}):
             token, links, errors, unchanged = panel.push_user_subscription(
                 self.data, user,
-                {'enabled': True, 'server_id': 0, 'path': 'sub'},
+                {'enabled': True, 'server_uid': 'mask', 'path': 'sub'},
                 self.data['servers'][0])
 
         self.assertEqual(links, 1)
@@ -119,7 +194,7 @@ class SubscriptionPushTests(unittest.TestCase):
                           return_value=('entry.example', None)),              patch.object(panel, 'xray_fp_kwargs', return_value={}):
             panel.push_user_subscription(
                 self.data, user,
-                {'enabled': True, 'server_id': 0, 'path': 'sub'},
+                {'enabled': True, 'server_uid': 'mask', 'path': 'sub'},
                 self.data['servers'][0])
         content, _ = self.uploads[0]
         base, _, fragment = base64.b64decode(content).decode().rpartition('#')
@@ -139,7 +214,7 @@ class SubscriptionPushTests(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 panel.push_user_subscription(
                     self.data, user,
-                    {'enabled': True, 'server_id': 0, 'path': 'sub'},
+                    {'enabled': True, 'server_uid': 'mask', 'path': 'sub'},
                     self.data['servers'][0])
         self.assertIn('198.51.100.1', str(ctx.exception))
         self.assertEqual(self.uploads, [])
@@ -154,7 +229,7 @@ class SubscriptionConfigTests(unittest.TestCase):
         injected = panel._apply_subscription_config_text(base, 'sub', 'My VPN')
         self.assertIn('location /sub/', injected)
         self.assertIn('add_header profile-title "My VPN" always;', injected)
-        self.assertIn('profile-update-interval "24"', injected)
+        self.assertIn('profile-update-interval "6"', injected)
 
         replaced = panel._apply_subscription_config_text(
             injected, 'sub2', panel._subscription_profile_title('Другое имя'))
@@ -195,7 +270,7 @@ class AutoPushTests(unittest.TestCase):
 
     def test_auto_push_writes_file_and_caches_the_url(self):
         self.data['settings'] = {'subscription': {
-            'enabled': True, 'server_id': 0, 'path': 'sub'}}
+            'enabled': True, 'server_uid': 'mask', 'path': 'sub'}}
         manager = Mock()
         manager.get_client_config = Mock(
             return_value='vless://peer-1@entry:443?type=tcp')
@@ -212,7 +287,7 @@ class AutoPushTests(unittest.TestCase):
 
     def test_auto_push_skips_identical_files_and_clears_dead_urls(self):
         self.data['settings'] = {'subscription': {
-            'enabled': True, 'server_id': 0, 'path': 'sub'}}
+            'enabled': True, 'server_uid': 'mask', 'path': 'sub'}}
         manager = Mock()
         manager.get_client_config = Mock(
             return_value='vless://peer-1@entry:443?type=tcp')
@@ -243,7 +318,7 @@ class AutoPushTests(unittest.TestCase):
 
     def test_auto_push_is_silent_when_disabled(self):
         self.data['settings'] = {'subscription': {
-            'enabled': False, 'server_id': 0, 'path': 'sub'}}
+            'enabled': False, 'server_uid': 'mask', 'path': 'sub'}}
         self.data['users'][0]['sub_url'] = 'https://mask.example/sub/keep'
         # Any SSH or data write attempt while disabled is a test failure.
         self.ssh.upload_file_sudo = Mock(side_effect=AssertionError('ssh write'))
@@ -266,7 +341,7 @@ class SubscriptionEndpointsTests(unittest.TestCase):
              patch.object(panel, '_check_admin', lambda request: True):
             result = panel.api_subscription_settings_save(
                 self.request(),
-                panel.SubscriptionSettingsRequest(enabled=True, server_id=1,
+                panel.SubscriptionSettingsRequest(enabled=True, server_uid='node',
                                                   path='sub'))
         self.assertEqual(result.status_code, 400)
         self.assertIn('NGINX', json.loads(result.body)['error'])
@@ -282,12 +357,60 @@ class SubscriptionEndpointsTests(unittest.TestCase):
     def test_users_list_carries_the_cached_sub_url(self):
         data = state()
         data['settings'] = {'subscription': {
-            'enabled': True, 'server_id': 0, 'path': 'sub'}}
+            'enabled': True, 'server_uid': 'mask', 'path': 'sub'}}
         data['users'][0]['sub_url'] = 'https://mask.example/sub/tok'
-        with patch.object(panel, 'load_data', return_value=data),              patch.object(panel, '_check_admin', lambda request: True):
+        with patch.object(panel, 'load_data', return_value=data), \
+             patch.object(panel, '_check_admin', lambda request: True):
             result = panel.api_list_users(self.request(), search='', page=1, size=10)
         self.assertEqual(result['users'][0]['sub_url'],
                          'https://mask.example/sub/tok')
+
+    def test_server_scope_add_triggers_the_subscription_push(self):
+        # Adding a connection from the server card
+        # (/api/servers/{id}/connections/add) must refresh the owner's
+        # subscription file just like the users-page endpoint does.
+        data = state()
+        data['settings'] = {'subscription': {
+            'enabled': True, 'server_id': 0, 'path': 'sub'}}
+        data['users'][0]['sub_url'] = 'https://mask.example/sub/tok'
+        pushed = []
+        manager = Mock()
+        manager.add_client.return_value = {'client_id': 'peer-new',
+                                           'config': 'vless://peer-new'}
+        with patch.object(panel, 'load_data', return_value=data), \
+             patch.object(panel, '_check_admin', lambda request: True), \
+             patch.object(panel, 'get_ssh', return_value=Mock()), \
+             patch.object(panel, 'get_protocol_manager', return_value=manager), \
+             patch.object(panel, 'save_data', Mock()), \
+             patch.object(panel, 'auto_push_subscriptions',
+                          Mock(side_effect=lambda d, ids: pushed.append(list(ids)))):
+            result = asyncio.run(panel.api_add_connection(
+                self.request(), 1,
+                panel.AddConnectionRequest(protocol='xray', name='phone',
+                                           user_id='u1')))
+        self.assertIn('config', result)
+        self.assertEqual(pushed, [['u1']])
+
+    def test_server_scope_add_without_a_user_does_not_push(self):
+        # An unowned connection has no subscription to refresh.
+        data = state()
+        data['settings'] = {'subscription': {
+            'enabled': True, 'server_id': 0, 'path': 'sub'}}
+        pushed = []
+        manager = Mock()
+        manager.add_client.return_value = {'client_id': 'peer-new',
+                                           'config': 'vless://peer-new'}
+        with patch.object(panel, 'load_data', return_value=data), \
+             patch.object(panel, '_check_admin', lambda request: True), \
+             patch.object(panel, 'get_ssh', return_value=Mock()), \
+             patch.object(panel, 'get_protocol_manager', return_value=manager), \
+             patch.object(panel, 'save_data', Mock()), \
+             patch.object(panel, 'auto_push_subscriptions',
+                          Mock(side_effect=lambda d, ids: pushed.append(list(ids)))):
+            asyncio.run(panel.api_add_connection(
+                self.request(), 1,
+                panel.AddConnectionRequest(protocol='xray', name='phone')))
+        self.assertEqual(pushed, [])
 
     def test_endpoints_require_admin(self):
         data = state()

@@ -119,7 +119,7 @@
                         {% endif %}
                     </div>
                     <button type="button" class="btn btn-secondary btn-sm" onclick="toggleBot()" id="toggleBotBtn">
-                        <span id="toggleBotBtnText">{% if bot_running %}{{ _('bot_stop_btn') }}{% else %}{{
+                        <span id="toggleBotBtnText">{% if telegram_settings.enabled %}{{ _('bot_stop_btn') }}{% else %}{{
                             _('bot_start_btn') }}{% endif %}</span>
                         <div class="spinner hidden" id="toggleBotSpinner" style="width:14px;height:14px;"></div>
                     </button>
@@ -966,7 +966,7 @@
                     <select class="form-input" id="subServer">
                         <option value="">—</option>
                         {% for server in subscription_servers %}
-                        <option value="{{ server.id }}" {% if subscription_settings.server_id == server.id %}selected{% endif %}>{{ server.label }}</option>
+                        <option value="{{ server.uid }}" {% if subscription_settings.server_uid == server.uid %}selected{% endif %}>{{ server.label }}</option>
                         {% endfor %}
                     </select>
                     <div class="form-hint">{{ _('subscription_server_hint') }}</div>
@@ -1078,7 +1078,7 @@
 <script>
     const serversData = {{ servers | tojson }};
     const protocolLabels = {{ server_protocol_labels | tojson }};
-    const botCurrentlyRunning = {{ 'true' if bot_running else 'false' }};
+    let botEnabled = {{ 'true' if telegram_settings.enabled else 'false' }};
 
     function updateProtocolsForSync() {
         const serverIdx = document.querySelector('[name="remnawave_server_id"]').value;
@@ -1410,7 +1410,6 @@
 
         const telegram = {
             token: document.getElementById('tg_token').value.trim(),
-            enabled: botCurrentlyRunning,
             auto_create_users: document.getElementById('tg_auto_create_users').checked,
             create_users_disabled: document.getElementById('tg_create_users_disabled').checked,
             webapp_initdata_auth: document.getElementById('tg_webapp_initdata_auth').checked,
@@ -1560,13 +1559,17 @@
         btn.disabled = true;
         spinner.classList.remove('hidden');
         try {
-            const res = await fetch('/api/settings/telegram/toggle', { method: 'POST' });
+            const res = await fetch('/api/settings/telegram/toggle', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: !botEnabled })
+            });
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || _('error'));
+            botEnabled = data.bot_enabled;
             const running = data.bot_running;
             document.getElementById('botStatusBadge').className = running ? 'badge badge-success' : 'badge badge-secondary';
             document.getElementById('botStatusBadge').textContent = running ? _('bot_running') : _('bot_stopped');
-            text.textContent = running ? _('bot_stop_btn') : _('bot_start_btn');
+            text.textContent = botEnabled ? _('bot_stop_btn') : _('bot_start_btn');
             showToast(running ? _('bot_started') : _('bot_stopped_msg'), 'success');
         } catch (err) {
             showToast(`${_('error')}: ` + err.message, 'error');
@@ -2299,8 +2302,7 @@ async function saveSubscription() {
     try {
             const res = await apiCall('/api/settings/subscription', 'POST', {
                 enabled: document.getElementById('sub_enabled').checked,
-                server_id: document.getElementById('subServer').value === ''
-                    ? null : parseInt(document.getElementById('subServer').value),
+                server_uid: document.getElementById('subServer').value || null,
                 path: document.getElementById('subPath').value.trim() || 'sub',
                 name: document.getElementById('subName').value.trim(),
             });

@@ -42,7 +42,7 @@ from fastapi.exception_handlers import request_validation_exception_handler
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.middleware.sessions import SessionMiddleware
 from pydantic import BaseModel, Field, StrictBool, constr, conint
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 import uvicorn
 import httpx
 import cheburcheck
@@ -82,11 +82,10 @@ from managers.wireguard_manager import WireGuardManager
 from managers.wireguard_exit_manager import WireGuardExitManager
 from bw_exit_manager import BWExitManager
 from managers.backup_manager import BackupManager
-from managers import torrent_events
-from managers.torrent_guard import (
-    DEFAULT_MODE as TORRENT_DEFAULT_MODE,
-    MODES as TORRENT_MODES,
-    normalize_mode as normalize_torrent_mode,
+from managers.torrent_guard import MODES as TORRENT_MODES
+from torrent_plugin_service import (
+    PluginError as TorrentPluginError,
+    TorrentPlugin,
 )
 from managers.instance_copy import (
     COPY_STEPS as INSTANCE_COPY_STEPS,
@@ -569,7 +568,7 @@ DATA_FILE = os.path.abspath(os.path.expanduser(
 ssh_trust.configure(DATA_FILE)
 # Client configs read the bypass list from whatever DATA_FILE is at call time.
 split_tunnel.configure(lambda: DATA_FILE)
-CURRENT_VERSION = "v1.8.13"
+CURRENT_VERSION = "v1.8.15"
 
 # Authoritative operational state for WARP lives outside data.json: dozens of
 # panel writers save their own snapshots and would overwrite it.
@@ -717,6 +716,7 @@ SERVER_MUTATION_LOCK = asyncio.Lock()
 
 @app.on_event('shutdown')
 async def close_panel_lease():
+    await tg_bot.stop_bot()
     if _panel_lease is not None:
         _panel_lease.close()
 
@@ -3283,18 +3283,6 @@ class ConnectionActionRequest(BaseModel):
     allow_unverified: bool = False
 
 
-class TorrentGuardRequest(BaseModel):
-    """Режим торрент-фильтра инстанса: on / count / off."""
-    protocol: str = 'awg'
-    mode: str = 'on'
-
-
-class TorrentClearRequest(BaseModel):
-    """Снятие метки торрент-активности: ключ (client_id) или адрес пира."""
-    protocol: str = ''
-    client_id: str = ''
-    ip: str = ''
-
 class RenameConnectionRequest(BaseModel):
     protocol: str = 'awg'
     client_id: str = ''
@@ -3417,6 +3405,10 @@ class DuckDNSApplyRequest(BaseModel):
     domain: str = ''
     # Empty keeps the stored token: the settings page never echoes it back.
     token: str = ''
+
+class TelegramToggleRequest(BaseModel):
+    enabled: StrictBool
+
 
 class TelegramSettings(BaseModel):
     token: str = ''
@@ -3585,153 +3577,21 @@ _subscription_monitor_started = False
 
 
 
-# Журнал торрент-событий живёт в панели, а не в контейнере: пересоздание
-# инстанса стирает правила, но не факт нарушения (нужен для разбора жалоб).
-TORRENT_EVENTS_FILE = os.path.join(os.path.dirname(DATA_FILE), 'torrent_events.json')
-_TORRENT_EVENTS_LOCK = threading.Lock()
-
-# Кэш журнала: читаем файл только когда он реально изменился (mtime+size).
-# Иначе каждый опрос плитки (раз в минуту на вкладку) и каждая страница
-# сервера заново читали и санитизировали весь JSON.
-_TORRENT_JOURNAL_CACHE = {'stamp': None, 'data': None}
-
-# Последнее состояние фильтра по (server_key, protocol) для UI: без него
-# админ видел «включено», даже когда правила не встали.
-_TORRENT_HEALTH = {}
-_TORRENT_HEALTH_LOCK = threading.Lock()
-
-# Протоколы, где трафик на интерфейсе уже расшифрован: сигнатуры видны.
-TORRENT_GUARD_PROTOCOLS = ('awg', 'awg2', 'awg3', 'awg_legacy', 'wireguard')
+# ===== Плагин «Защита от торрентов» =====
+# Фича живёт вне ядра: стор, настройки, статус и операции — в
+# torrent_plugin_service.py. Пока плагин не установлен на сервере, ядро не
+# рендерит его разметку, не отдаёт его роуты и не ходит на сервер по SSH.
+torrent_plugin = TorrentPlugin(lambda: DATA_FILE)
 
 
-def _torrent_mode_of(server, proto):
-    """Режим фильтра инстанса. По умолчанию — защита включена."""
-    entry = (server.get('protocols') or {}).get(proto) or {}
-    if not isinstance(entry, dict):
-        return TORRENT_DEFAULT_MODE
-    return normalize_torrent_mode(entry.get('torrent_guard') or TORRENT_DEFAULT_MODE)
-
-
-def _torrent_journal():
-    """Один снимок журнала на запрос; перечитываем только при изменении файла."""
-    with _TORRENT_EVENTS_LOCK:
-        try:
-            stat = os.stat(TORRENT_EVENTS_FILE)
-            stamp = (stat.st_mtime_ns, stat.st_size)
-        except OSError:
-            stamp = None
-        if stamp is not None and _TORRENT_JOURNAL_CACHE['stamp'] == stamp:
-            return _TORRENT_JOURNAL_CACHE['data']
-        data = torrent_events.load(TORRENT_EVENTS_FILE)
-        _TORRENT_JOURNAL_CACHE['stamp'] = stamp
-        _TORRENT_JOURNAL_CACHE['data'] = data
-        return data
-
-
-def _torrent_set_health(server, proto, result):
-    """Запоминает последний результат коллектора для UI (без SSH на GET)."""
-    key = torrent_events.server_key(server)
-    if not key:
-        return
-    error = (result or {}).get('error') or ''
-    with _TORRENT_HEALTH_LOCK:
-        bucket = _TORRENT_HEALTH.setdefault(key, {})
-        bucket[proto] = {'ok': not error, 'error': error,
-                         'ts': int(time.time())}
-
-
-def _torrent_health_for(server):
-    """Сводка здоровья фильтра по серверу для карточки и списка подключений."""
-    key = torrent_events.server_key(server)
-    if not key:
-        return {}
-    with _TORRENT_HEALTH_LOCK:
-        bucket = dict(_TORRENT_HEALTH.get(key) or {})
-    if not bucket:
-        return {}
-    errors = [item['error'] for item in bucket.values() if item.get('error')]
-    latest = max(int(item.get('ts') or 0) for item in bucket.values())
-    return {'ok': not errors, 'error': errors[0] if errors else '',
-            'ts': latest, 'protocols': bucket}
-
-
-def _torrent_summary_for(server, proto=None, journal=None):
-    """Сводка журнала по серверу (или по одному протоколу)."""
-    key = torrent_events.server_key(server)
-    if not key:
-        return {}
-    if journal is None:
-        journal = _torrent_journal()
-    summary = torrent_events.summary(journal, key)
-    if proto:
-        item = summary.get(proto)
-        return {proto: item} if item else {}
-    return summary
-
-
-def _torrent_peer_buckets(server, proto, journal=None):
-    """События по адресам пиров одного инстанса (для страницы сервера)."""
-    key = torrent_events.server_key(server)
-    if not key:
-        return {}
-    if journal is None:
-        journal = _torrent_journal()
-    return torrent_events.peer_buckets(journal, key, proto)
-
-
-def _torrent_record_events(server, proto, events, manager=None):
-    """Пишет события коллектора в журнал панели (TTL 30 дней, 20 на пира).
-
-    Событие приходит по tunnel-IP; чтобы плитка могла дать deep link сразу до
-    ключа, адрес переводится в client_id через clientsTable. Лишний SSH-заход
-    делается только когда события реально есть, то есть редко.
-    """
-    key = torrent_events.server_key(server)
-    events = list(events or ())
-    if not key or not events:
+def _torrent_prune_marks():
+    """Снимает просроченные метки; TTL и состав — по установленным серверам."""
+    try:
+        data = load_data()
+    except Exception as exc:                            # noqa: BLE001
+        logger.warning('torrent journal prune: %s', exc)
         return 0
-    ip_map = {}
-    if manager is not None:
-        try:
-            clients = _manager_call(manager, 'get_clients', proto) or []
-            for client in clients:
-                user_data = client.get('userData') or {}
-                ip = user_data.get('clientIp') or ''
-                if not ip:
-                    m = re.search(r'(\d+\.\d+\.\d+\.\d+)',
-                                  user_data.get('allowedIps') or '')
-                    ip = m.group(1) if m else ''
-                if ip:
-                    ip_map[ip] = client.get('clientId') or ''
-        except Exception as e:
-            logger.warning('torrent journal: client map failed: %s', e)
-    added = 0
-    with _TORRENT_EVENTS_LOCK:
-        journal = torrent_events.load(TORRENT_EVENTS_FILE)
-        torrent_events.prune(journal)
-        for event in events:
-            ip = event.get('ip')
-            added += torrent_events.record(
-                journal, key, proto, ip, [event], client_id=ip_map.get(ip, ''))
-        if added:
-            try:
-                torrent_events.save(TORRENT_EVENTS_FILE, journal)
-            except OSError as e:
-                logger.warning('torrent journal save failed: %s', e)
-    return added
-
-
-def _torrent_prune():
-    """Снимает просроченные события независимо от прихода новых."""
-    with _TORRENT_EVENTS_LOCK:
-        journal = torrent_events.load(TORRENT_EVENTS_FILE)
-        removed = torrent_events.prune(journal)
-        if removed:
-            try:
-                torrent_events.save(TORRENT_EVENTS_FILE, journal)
-            except OSError as e:
-                logger.warning('torrent journal prune save failed: %s', e)
-        return removed
+    return torrent_plugin.prune(data.get('servers', []))
 
 
 def _conn_monitor_once(data):
@@ -3740,41 +3600,50 @@ def _conn_monitor_once(data):
     Инстансы обходятся параллельно (4 потока): раньше зависшая нода съедала
     до 300 с на протокол и остальные ноды всё это время не восстанавливали
     правила после перезагрузки.
+
+    Flood-детект — ядровая функция и работает всегда. Торрент-ветка плагина
+    выполняется только для серверов, где плагин установлен: иначе панель
+    «без торрентов» всё равно ходила бы по SSH ради правил.
     """
     tasks = []
     for server in data.get('servers', []):
+        installed = torrent_plugin.installed(server)
         protocols = server.get('protocols') or {}
-        for proto, entry in protocols.items():
-            if protocol_base(proto) not in TORRENT_GUARD_PROTOCOLS:
-                continue
+        for proto in torrent_plugin.capable(server, True):
+            entry = protocols.get(proto)
             if not isinstance(entry, dict) or entry.get('installed') is False:
                 continue
-            tasks.append((server, proto))
+            tasks.append((server, proto, installed))
 
     def work(item):
-        server, proto = item
+        server, proto, guard_on = item
         try:
             manager = get_protocol_manager(get_ssh(server), proto)
             # Flood-мониторинг остаётся там же, где был: только AWG.
-            if protocol_base(proto) in ('awg', 'awg2', 'awg3'):
+            if proto.split('__', 1)[0] in ('awg', 'awg2', 'awg3'):
                 try:
                     manager.collect_conn_stats(proto)
                 except Exception as e:                  # noqa: BLE001
                     logger.warning(
                         f"conn monitor: {server.get('host')} {proto}: {e}")
+            if not guard_on:
+                return
             guard_factory = getattr(manager, 'torrent_guard', None)
             if not callable(guard_factory):
                 return
-            result = guard_factory(proto).collect(_torrent_mode_of(server, proto))
-            _torrent_set_health(server, proto, result)
+            result = torrent_plugin.collect(server, proto,
+                                            guard_factory(proto))
             if result.get('error'):
                 logger.warning(
                     f"torrent guard: {server.get('host')} {proto}: "
                     f"{result['error']}")
             elif result.get('events'):
-                _torrent_record_events(server, proto, result['events'], manager)
+                torrent_plugin.record_events(
+                    server, proto, result['events'],
+                    lambda: _manager_call(manager, 'get_clients', proto))
         except Exception as e:                          # noqa: BLE001
-            _torrent_set_health(server, proto, {'error': str(e)})
+            if guard_on:
+                torrent_plugin.set_health(server, proto, {'error': str(e)})
             logger.warning(
                 f"conn monitor: {server.get('host')} {proto}: {e}")
 
@@ -3811,7 +3680,7 @@ def _conn_monitor_loop():
         except Exception as e:
             logger.warning(f"conn monitor loop: {e}")
         try:
-            _torrent_prune()
+            _torrent_prune_marks()
         except Exception as e:
             logger.warning(f"torrent journal prune: {e}")
         time.sleep(CONN_MONITOR_INTERVAL)
@@ -3943,6 +3812,13 @@ async def startup():
     asyncio.create_task(restore_public_port_forwards())
     # ... and keep re-applying: a VPS can reboot while the panel keeps running.
     asyncio.create_task(restore_public_port_forwards_loop())
+    # Smart Route lives in the container network namespace and is wiped by any
+    # container restart; the panel re-applies it instead of trusting the host
+    # timer to catch up "within an hour" (or never, if that timer is stuck).
+    asyncio.create_task(smartroute_reconcile_loop())
+    # One-shot: the timer unit of every existing installation carries the old
+    # monotonic schedule; rewrite it so the hourly re-apply stays armed.
+    asyncio.create_task(smartroute_timer_migration())
     # One-shot: old RKN installs have no [Install] in the unit and lose their
     # rules at reboot. Runs in the background, never blocks startup.
     asyncio.create_task(rkn_boot_restore_migration())
@@ -4759,7 +4635,14 @@ def index(request: Request):
     if user['role'] not in ('admin', 'support'):
         return RedirectResponse(url='/my', status_code=302)
     data = load_data()
-    return tpl(request, 'index.html', servers=data['servers'])
+    servers = data['servers']
+    # Плагин «Защита от торрентов»: плитки и опрос флагов рендерятся только
+    # для серверов, где он установлен. Нет ни одного — на странице нет ни
+    # разметки плиток, ни JS опроса.
+    return tpl(request, 'index.html', servers=servers,
+               torrent_plugin_any=torrent_plugin.installed_any(servers),
+               torrent_plugin_servers=[torrent_plugin.installed(server)
+                                       for server in servers])
 
 
 @app.get('/servers/new', response_class=HTMLResponse, tags=["System Templates"])
@@ -4791,7 +4674,9 @@ async def server_detail(request: Request, server_id: int):
     server = data['servers'][server_id]
     users_list = data.get('users', [])
     return tpl(request, 'server.html', server=server, server_id=server_id,
-               users=users_list, copy_targets=_instance_copy_targets(data, server_id))
+               users=users_list,
+               copy_targets=_instance_copy_targets(data, server_id),
+               torrent_plugin=torrent_plugin.status(server))
 
 
 @app.get('/users', response_class=HTMLResponse, tags=["System Templates"])
@@ -5168,6 +5053,35 @@ def _ssh_onboarding_endpoint(req):
     return endpoint
 
 
+_TRUST_ERROR_CODES = (
+    (ssh_trust.SystemTrustConflict, 'system_trust_conflict', 'system_conflict'),
+    (ssh_trust.TrustFileReadOnly, 'trust_file_readonly', 'trust_readonly'),
+    (ssh_trust.TrustChanged, 'trust_changed', ''),
+)
+
+
+def _trust_error_response(exc, server=None, status_code=409):
+    """409 body for a trust write the panel refuses to do on its own.
+
+    ``remediation`` carries copy-ready console commands, built from this
+    installation's real paths, so the same hint works for any host and port.
+    ``server`` is None when the request failed before the endpoint was
+    resolved; then only the error code is reported.
+    """
+    error_code = 'trust_error'
+    remediation = None
+    for kind, code, reason in _TRUST_ERROR_CODES:
+        if isinstance(exc, kind):
+            error_code = code
+            if reason and server is not None:
+                remediation = ssh_trust.remediation(server, reason)
+            break
+    payload = {'error': str(exc), 'error_code': error_code}
+    if remediation:
+        payload['remediation'] = remediation
+    return JSONResponse(payload, status_code=status_code)
+
+
 @app.post('/api/ssh-trust/onboarding/inspect', tags=["Servers"])
 async def api_ssh_onboarding_inspect(request: Request, req: SSHOnboardingEndpoint):
     if not _ssh_trust_admin(request):
@@ -5190,6 +5104,7 @@ async def api_ssh_onboarding_confirm(request: Request, req: SSHOnboardingConfirm
         return JSONResponse({'error': 'Forbidden'}, status_code=403)
     if not req.confirmed:
         return JSONResponse({'error': 'Explicit confirmation required'}, status_code=400)
+    endpoint = None
     try:
         async with DATA_LOCK:
             endpoint = _ssh_onboarding_endpoint(req)
@@ -5200,7 +5115,7 @@ async def api_ssh_onboarding_confirm(request: Request, req: SSHOnboardingConfirm
             lambda: endpoint == _ssh_onboarding_endpoint(req), reset_server)
         return dict(result, ssh_authenticated=False)
     except Exception as exc:
-        return JSONResponse({'error': str(exc)}, status_code=409)
+        return _trust_error_response(exc, endpoint)
 
 
 def _ssh_trust_admin(request):
@@ -5303,7 +5218,7 @@ async def api_ssh_trust_confirm(request: Request, server_id: int, req: SSHTrustC
                        for s in current)
         return await _save_ssh_confirmation(server, req.token, key, unchanged, server)
     except Exception as exc:
-        return JSONResponse({'error': str(exc)}, status_code=409)
+        return _trust_error_response(exc, server)
 
 
 def _server_identity(server_id, server_uid=None):
@@ -5345,11 +5260,23 @@ def _classify_ssh_error(exc):
     the two host-key states Paramiko reports as generic SSHException.
     """
     import paramiko as _paramiko
+    # Imported here, not at module level, so this function stays usable when it
+    # is extracted on its own (tests exec it with a reduced globals namespace).
+    from managers import ssh_trust as _ssh_trust
 
     if isinstance(exc, _paramiko.AuthenticationException):
         return 'authentication_failed'
     if isinstance(exc, _paramiko.BadHostKeyException):
         return 'host_key_changed'
+    # Trust write refusals carry their own codes. They subclass
+    # ValueError/PermissionError, so they must be checked before the generic
+    # OSError branch turns a read-only trust file into "network_error".
+    if isinstance(exc, _ssh_trust.SystemTrustConflict):
+        return 'system_trust_conflict'
+    if isinstance(exc, _ssh_trust.TrustFileReadOnly):
+        return 'trust_file_readonly'
+    if isinstance(exc, _ssh_trust.TrustChanged):
+        return 'trust_changed'
     if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
         return 'network_error'
     if isinstance(exc, _paramiko.SSHException):
@@ -7973,24 +7900,6 @@ def _selfsteal_dest(xray_networks, nginx_networks, nginx_container):
     return None
 
 
-def _selfsteal_site_ok(ssh, xray_container, domain, dest):
-    """The mask only holds while the site answers with a valid
-    certificate for the domain. Probe from inside the Xray container
-    against the exact dest that will be written — the container-to-
-    container hop is the path Reality actually uses, so host-side port
-    publishing, proxy env and CA bundles cannot skew the result. DNS may
-    point anywhere (relays included); --resolve forces the local hop."""
-    dest_host, _, dest_port = str(dest).rpartition(':')
-    if not dest_host:
-        return False
-    out, _, code = ssh.run_sudo_command(
-        f"docker exec {shlex.quote(str(xray_container))} "
-        f"curl -s 2>/dev/null --resolve {shlex.quote(f'{domain}:{dest_port or 443}:{dest_host}')} "
-        f"{shlex.quote('https://' + domain + '/')} -o /dev/null "
-        f"-w '%{{http_code}}' --max-time 8")
-    return code == 0 and bool(re.fullmatch(r'\d{3}', out.strip()))
-
-
 @app.get('/api/servers/{server_id}/xray/selfsteal/plan', tags=["Protocols"])
 def api_xray_selfsteal_plan(request: Request, server_id: int, protocol: str = 'xray'):
     if not _check_admin(request):
@@ -8039,8 +7948,6 @@ def api_xray_selfsteal_plan(request: Request, server_id: int, protocol: str = 'x
                 'container_name': status['container_name'],
                 'port': int(status.get('port') or 443),
                 'dest': dest,
-                'site_ok': bool(dest) and _selfsteal_site_ok(
-                    ssh, xray_container, status['domain'], dest),
             })
         return {
             'xray_running': xray_running,
@@ -8089,16 +7996,450 @@ def api_xray_selfsteal_apply(request: Request, server_id: int, req: XraySelfstea
         if not dest:
             return JSONResponse({'error': 'No route from the Xray container to NGINX'},
                                 status_code=409)
-        if not _selfsteal_site_ok(ssh, xray_container, domain, dest):
-            return JSONResponse(
-                {'error': 'The site does not answer with a valid certificate '
-                          'for the domain yet — issue the certificate first'},
-                status_code=409)
         result = manager.apply_selfsteal(domain, dest)
         result['protocol'] = req.protocol
         return result
     except Exception as e:
         logger.exception("Error applying the xray selfsteal")
+        return JSONResponse({'error': str(e)}, status_code=500)
+
+
+# ===== server IPv4 policy: egress SNAT + ingress binding =====
+# Egress: one SNAT rule per docker bridge subnet on the host sends all
+# container traffic out through a second public IP (entry != exit per
+# the Reality setup guidance). Each rule mirrors docker's own masquerade
+# shape (-s <subnet> ! -o <that bridge>) and covers every subnet the
+# traffic can originate from - with docker 28+ the default gateway may
+# end up on any attached network, e.g. the self-steal one. sendThrough
+# cannot do this from a bridge container - the public IP is not visible
+# in its network namespace.
+# The rules are written to every installed iptables backend (nft and
+# legacy) - a plain `iptables` lookup may resolve differently for the
+# panel's non-login SSH shell than for a root shell.
+# The apply is verified end-to-end: a curl from inside the VPN container
+# must report the egress address, otherwise the rules are rolled back.
+# Ingress: pins the published ports to one host address at container
+# (re)creation, so the egress address stops exposing the VPN listener.
+
+def _ipv4_assigned(ssh, ip):
+    """Is the IPv4 address assigned to an interface of this server?"""
+    out, _, code = ssh.run_sudo_command("ip -4 addr show")
+    return code == 0 and f"{ip}/" in (out or '')
+
+
+def _egress_verify(ssh, ip):
+    """Does the address actually egress? A curl bound to it must report
+    it back - this catches providers that accept the assignment but
+    filter foreign sources, and revoked/undelivered addresses."""
+    out, _, code = ssh.run_command(
+        f"curl -4 -s --interface {shlex.quote(ip)} --max-time 8 "
+        f"https://api.ipify.org")
+    return code == 0 and (out or '').strip() == ip
+
+
+def _docker_subnets(ssh):
+    """(subnet, bridge iface) for every bridge network on the host. The
+    SNAT must cover each subnet container traffic can originate from -
+    with docker 28+ the default gateway (and so the source address) may
+    end up on any attached network, e.g. the self-steal one."""
+    out, _, code = ssh.run_sudo_command(
+        "docker network ls --format '{{.Name}} {{.Driver}}'")
+    if code != 0:
+        return []
+    names = [parts[0] for parts in
+             (p.split() for p in (out or '').split('\n'))
+             if len(parts) == 2 and parts[1] == 'bridge']
+    subnets = []
+    for name in names:
+        out, _, code = ssh.run_sudo_command(
+            "docker network inspect " + shlex.quote(name)
+            + " --format '{{(index .IPAM.Config 0).Subnet}}|"
+            "{{index .Options \"com.docker.network.bridge.name\"}}|{{.Id}}'")
+        if code != 0 or '|' not in (out or ''):
+            continue
+        subnet, opt, net_id = out.strip().split('|', 2)
+        if opt in ('<no value>', 'nil'):
+            opt = ''
+        try:
+            net = ipaddress.ip_network(subnet, strict=False)
+        except ValueError:
+            continue
+        if net.version != 4:
+            continue
+        iface = opt or ('docker0' if name == 'bridge'
+                        else 'br-' + net_id[:12])
+        subnets.append((subnet, iface))
+    return subnets
+
+
+def _egress_probe_containers(server):
+    """VPN containers whose traffic the egress IP must serve."""
+    vpn_bases = ('xray', 'awg', 'awg2', 'awg3', 'awg_legacy', 'wireguard')
+    names = []
+    for key, info in (server.get('protocols') or {}).items():
+        if protocol_base(key) in vpn_bases \
+                and isinstance(info, dict) and info.get('container_name'):
+            names.append(info['container_name'])
+    return names
+
+
+def _egress_container_probe(ssh, containers):
+    """The only honest egress check: plain curl from inside a VPN
+    container. With the SNAT rule in place it reports the egress
+    address; without it, the main one. Images without curl are probed
+    via nsenter (the host's curl inside the container's network
+    namespace). Returns the observed IP or None when no container
+    answers (probe impossible)."""
+    for container in containers:
+        out, _, code = ssh.run_sudo_command(
+            f"docker exec {shlex.quote(str(container))} "
+            f"curl -4 -s --max-time 8 https://api.ipify.org")
+        observed = (out or '').strip()
+        if code == 0 and observed:
+            return observed
+        pid_out, _, pid_code = ssh.run_sudo_command(
+            f"docker inspect -f '{{{{.State.Pid}}}}' "
+            f"{shlex.quote(str(container))} 2>/dev/null")
+        pid = (pid_out or '').strip()
+        if pid_code != 0 or not pid.isdigit():
+            continue
+        out, _, code = ssh.run_sudo_command(
+            f"nsenter -n -t {pid} curl -4 -s --max-time 8 "
+            f"https://api.ipify.org")
+        observed = (out or '').strip()
+        if code == 0 and observed:
+            return observed
+    return None
+
+
+def _iptables_bins(ssh):
+    """Explicit iptables backend binaries. A plain `iptables` lookup can
+    resolve to a different backend for the panel's non-login SSH shell
+    than for an interactive root shell; naming the backends removes the
+    guesswork. Both are written when present - the kernel consults both
+    and the first NAT decision wins, so the rule works either way."""
+    out, _, code = ssh.run_command(
+        'command -v iptables-nft || true; command -v iptables-legacy || true')
+    bins = [line.strip() for line in (out or '').split('\n') if line.strip()]
+    return bins or ['iptables']
+
+
+def _snat_rules_for(ssh, subnets):
+    """Managed POSTROUTING SNAT rules: those sourced from inside any
+    docker subnet, across every installed iptables backend. The panel
+    owns the egress policy for container traffic, so a stale manual rule
+    like -s 172.17.0.0/24 inside docker0's /16 is picked up too. Rules
+    without -s (host-wide) are never touched. Live spec strings, usable
+    for -D deletion."""
+    pools = [ipaddress.ip_network(s) for s, _ in subnets]
+    specs = set()
+    for bin_name in _iptables_bins(ssh):
+        out, _, code = ssh.run_sudo_command(
+            f'{bin_name} -t nat -S POSTROUTING')
+        if code != 0:
+            continue
+        for line in (out or '').split('\n'):
+            line = line.strip()
+            if not line.startswith('-A POSTROUTING') \
+                    or '-j SNAT' not in line:
+                continue
+            match = re.search(r'-s (\S+) ', line)
+            if not match:
+                continue
+            try:
+                src = ipaddress.ip_network(match.group(1), strict=False)
+            except ValueError:
+                continue
+            if any(src.subnet_of(pool) for pool in pools):
+                specs.add(line[len('-A POSTROUTING '):].strip())
+    return sorted(specs)
+
+
+def _persist_egress(ssh, subnets, ip):
+    """Boot-persistent re-application via a script + systemd oneshot unit
+    on the server (netfilter-persistent may only save one iptables
+    backend; the script is deterministic)."""
+    rules = []
+    for bin_name in _iptables_bins(ssh):
+        for subnet, iface in subnets:
+            rules.append(
+                f'{bin_name} -t nat -C POSTROUTING -s {subnet} ! -o {iface} '
+                f'-j SNAT --to-source {ip} 2>/dev/null || '
+                f'{bin_name} -t nat -I POSTROUTING -s {subnet} ! -o {iface} '
+                f'-j SNAT --to-source {ip}')
+    script = ('#!/bin/sh' + chr(10)
+              + '# Managed by Amnezia Web Panel: re-applies the egress SNAT'
+              + chr(10) + (chr(10).join(rules) or 'true') + chr(10))
+    unit = ('[Unit]' + chr(10)
+            + 'Description=Amnezia Web Panel egress SNAT' + chr(10)
+            + 'After=network-online.target' + chr(10)
+            + 'Wants=network-online.target' + chr(10)
+            + chr(10) + '[Service]' + chr(10)
+            + 'Type=oneshot' + chr(10)
+            + 'ExecStart=/opt/amnezia/egress-snat.sh' + chr(10)
+            + chr(10) + '[Install]' + chr(10)
+            + 'WantedBy=multi-user.target' + chr(10))
+    ssh.run_sudo_command(
+        'systemctl disable --now amnezia-egress-snat 2>/dev/null || true')
+    ssh.upload_file_sudo(script, '/opt/amnezia/egress-snat.sh')
+    ssh.run_sudo_command('chmod +x /opt/amnezia/egress-snat.sh')
+    ssh.upload_file_sudo(unit, '/etc/systemd/system/amnezia-egress-snat.service')
+    ssh.run_sudo_command('systemctl daemon-reload')
+    ssh.run_sudo_command('systemctl enable amnezia-egress-snat')
+
+
+def _clear_egress(ssh, subnets):
+    """Remove the managed SNAT rules and the boot persistence."""
+    bins = _iptables_bins(ssh)
+    for spec in _snat_rules_for(ssh, subnets):
+        for bin_name in bins:
+            ssh.run_sudo_command(
+                f'{bin_name} -t nat -D POSTROUTING ' + spec)
+    ssh.run_sudo_command(
+        'systemctl disable --now amnezia-egress-snat 2>/dev/null || true')
+    ssh.run_sudo_command('rm -f /opt/amnezia/egress-snat.sh '
+                         '/etc/systemd/system/amnezia-egress-snat.service')
+    ssh.run_sudo_command('systemctl daemon-reload 2>/dev/null || true')
+
+
+class Ipv4EgressRequest(BaseModel):
+    ip: str = ''
+
+
+class Ipv4IngressRequest(BaseModel):
+    ip: str = ''
+
+
+@app.get('/api/servers/{server_id}/ipv4/status', tags=["Servers"])
+def api_ipv4_status(request: Request, server_id: int):
+    if not _check_admin(request):
+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
+    try:
+        data = load_data()
+        if server_id >= len(data['servers']):
+            return JSONResponse({'error': 'Server not found'}, status_code=404)
+        server = data['servers'][server_id]
+        ssh = get_ssh(server)
+        ssh.connect()
+        try:
+            subnets = _docker_subnets(ssh)
+            egress_ip = server.get('egress_ip') or ''
+            probe_ip = _egress_container_probe(
+                ssh, _egress_probe_containers(server))
+            state = {
+                'ingress_ip': server.get('ingress_ip') or '',
+                'egress_ip': egress_ip,
+                'subnets': [s for s, _ in subnets],
+                'snat_rules': _snat_rules_for(ssh, subnets),
+                'assigned': bool(egress_ip) and _ipv4_assigned(ssh, egress_ip),
+                'egress_verified': bool(egress_ip) and _egress_verify(ssh, egress_ip),
+                'container_egress_ip': probe_ip,
+                'container_ok': bool(egress_ip) and probe_ip == egress_ip,
+            }
+        finally:
+            ssh.disconnect()
+        return state
+    except Exception as e:
+        logger.exception("Error reading the server IPv4 policy")
+        return JSONResponse({'error': str(e)}, status_code=500)
+
+
+@app.post('/api/servers/{server_id}/ipv4/egress', tags=["Servers"])
+async def api_ipv4_egress(request: Request, server_id: int,
+                          req: Ipv4EgressRequest):
+    if not _check_admin(request):
+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
+    try:
+        data = load_data()
+        if server_id >= len(data['servers']):
+            return JSONResponse({'error': 'Server not found'}, status_code=404)
+        _install_ops_load()
+        if _install_running(server_id):
+            return JSONResponse(
+                {'error': 'Another operation is running on this server',
+                 'code': 'operation_in_progress'}, status_code=409)
+        server = data['servers'][server_id]
+        ip = (req.ip or '').strip()
+        ssh = get_ssh(server)
+        ssh.connect()
+        try:
+            subnets = _docker_subnets(ssh)
+            if not subnets:
+                return JSONResponse(
+                    {'error': 'no docker bridge networks found on this '
+                              'server'}, status_code=409)
+            if ip:
+                try:
+                    ipaddress.IPv4Address(ip)
+                except ValueError:
+                    return JSONResponse({'error': 'Invalid IPv4 address'},
+                                        status_code=400)
+                if not _ipv4_assigned(ssh, ip):
+                    return JSONResponse(
+                        {'error': f'{ip} is not assigned to any interface '
+                                  'of this server - the provider must '
+                                  'deliver it first'}, status_code=409)
+                if not _egress_verify(ssh, ip):
+                    return JSONResponse(
+                        {'error': f'{ip} does not egress: a curl bound to it '
+                                  'did not report it back. Check with the '
+                                  'provider that the address is routed'},
+                        status_code=409)
+            bins = _iptables_bins(ssh)
+            for spec in _snat_rules_for(ssh, subnets):
+                for bin_name in bins:
+                    ssh.run_sudo_command(
+                        f'{bin_name} -t nat -D POSTROUTING ' + spec)
+            if ip:
+                errors = []
+                for bin_name in bins:
+                    for subnet, iface in subnets:
+                        _, err, code = ssh.run_sudo_command(
+                            f'{bin_name} -t nat -I POSTROUTING -s {subnet} '
+                            f'! -o {iface} -j SNAT --to-source {ip}')
+                        if code != 0:
+                            errors.append(
+                                f'{bin_name} {subnet}: '
+                                f'{(err or "").strip() or "iptables failed"}')
+                landed = _snat_rules_for(ssh, subnets)
+                if errors or not landed:
+                    # A silently skipped rule would leave the exit policy
+                    # half-applied - undo whatever landed and say so.
+                    for spec in landed:
+                        for bin_name in bins:
+                            ssh.run_sudo_command(
+                                f'{bin_name} -t nat -D POSTROUTING ' + spec)
+                    return JSONResponse(
+                        {'error': 'Failed to insert the SNAT rules: '
+                                  + '; '.join(errors
+                                              or ['rules did not persist'])},
+                        status_code=409)
+                observed = _egress_container_probe(
+                    ssh, _egress_probe_containers(server))
+                if observed is not None and observed != ip:
+                    # The rules exist but the container path does not go
+                    # through them - leave the server as it was.
+                    for spec in _snat_rules_for(ssh, subnets):
+                        for bin_name in bins:
+                            ssh.run_sudo_command(
+                                f'{bin_name} -t nat -D POSTROUTING ' + spec)
+                    return JSONResponse(
+                        {'error': f'The SNAT rules were inserted, but the '
+                                  f'container still egresses as '
+                                  f'{observed} instead of {ip} - rolled '
+                                  'back. Check the host routing and '
+                                  'docker networks'},
+                        status_code=409)
+                _persist_egress(ssh, subnets, ip)
+            else:
+                _clear_egress(ssh, subnets)
+        finally:
+            ssh.disconnect()
+        server['egress_ip'] = ip or None
+        save_data(data)
+        return {'status': 'success', 'egress_ip': ip or None}
+    except Exception as e:
+        logger.exception("Error applying the egress IP")
+        return JSONResponse({'error': str(e)}, status_code=500)
+
+
+@app.post('/api/servers/{server_id}/ipv4/ingress', tags=["Servers"])
+async def api_ipv4_ingress(request: Request, server_id: int,
+                           req: Ipv4IngressRequest):
+    if not _check_admin(request):
+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
+    try:
+        data = load_data()
+        if server_id >= len(data['servers']):
+            return JSONResponse({'error': 'Server not found'}, status_code=404)
+        server = data['servers'][server_id]
+        ip = (req.ip or '').strip()
+        if ip:
+            try:
+                ipaddress.IPv4Address(ip)
+            except ValueError:
+                return JSONResponse({'error': 'Invalid IPv4 address'},
+                                    status_code=400)
+            ssh = get_ssh(server)
+            ssh.connect()
+            try:
+                if not _ipv4_assigned(ssh, ip):
+                    return JSONResponse(
+                        {'error': f'{ip} is not assigned to any interface '
+                                  'of this server - the provider must '
+                                  'deliver it first'}, status_code=409)
+            finally:
+                ssh.disconnect()
+        server['ingress_ip'] = ip or None
+        save_data(data)
+        return {'status': 'success', 'ingress_ip': ip or None,
+                'applied': False}
+    except Exception as e:
+        logger.exception("Error saving the ingress IP")
+        return JSONResponse({'error': str(e)}, status_code=500)
+
+
+@app.post('/api/servers/{server_id}/ipv4/ingress/recreate', tags=["Servers"])
+async def api_ipv4_ingress_recreate(request: Request, server_id: int):
+    """Recreate the xray containers now, publishing their ports on the
+    saved ingress address. Brief downtime."""
+    if not _check_admin(request):
+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
+    try:
+        data = load_data()
+        if server_id >= len(data['servers']):
+            return JSONResponse({'error': 'Server not found'}, status_code=404)
+        _install_ops_load()
+        if _install_running(server_id):
+            return JSONResponse(
+                {'error': 'Another operation is running on this server',
+                 'code': 'operation_in_progress'}, status_code=409)
+        server = data['servers'][server_id]
+        ingress_ip = (server.get('ingress_ip') or '').strip() or None
+        ssh = get_ssh(server)
+        ssh.connect()
+        if ingress_ip and not _ipv4_assigned(ssh, ingress_ip):
+            ssh.disconnect()
+            return JSONResponse(
+                {'error': f'{ingress_ip} is not assigned to any interface '
+                          'of this server - the provider must deliver it '
+                          'first'}, status_code=409)
+        recreated = []
+        try:
+            awg_bases = ('awg', 'awg2', 'awg3', 'awg_legacy')
+            for key in (server.get('protocols') or {}):
+                base = protocol_base(key)
+                if base == 'xray':
+                    manager = get_protocol_manager(ssh, key)
+                    await asyncio.to_thread(manager.recreate_container,
+                                            ingress_ip=ingress_ip)
+                    recreated.append(key)
+                elif base in awg_bases:
+                    manager = get_protocol_manager(ssh, key)
+                    await asyncio.to_thread(manager.recreate_container,
+                                            protocol_type=key,
+                                            ingress_ip=ingress_ip)
+                    recreated.append(key)
+            if recreated:
+                # A fresh xray container loses the panel-managed network
+                # attachments - restore them (self-steal dest depends on
+                # the shared network). AWG has no self-steal attachment.
+                xray_containers = []
+                for key in recreated:
+                    if protocol_base(key) != 'xray':
+                        continue
+                    record = (server.get('protocols') or {}).get(key, {})
+                    xray_containers.append(record.get('container_name')
+                                           or get_protocol_manager(
+                                               ssh, key).container_name)
+                if xray_containers:
+                    _ensure_selfsteal_network(ssh, xray_containers)
+        finally:
+            ssh.disconnect()
+        return {'status': 'success', 'recreated': recreated,
+                'ingress_ip': ingress_ip}
+    except Exception as e:
+        logger.exception("Error recreating containers for the ingress IP")
         return JSONResponse({'error': str(e)}, status_code=500)
 
 
@@ -8563,6 +8904,7 @@ async def api_install_protocol(request: Request, server_id: int, req: InstallPro
                 port=req.port,
                 transport=req.xray_transport or 'tcp',
                 site_name=(req.xray_domain or '').strip() or 'yahoo.com',
+                ingress_ip=(server.get('ingress_ip') or None),
             )
         elif install_base == 'wireguard':
             install_args = ()
@@ -9607,6 +9949,19 @@ async def _run_awg_plugin_update(op_id, server_id, component, target, allow_inte
         op['finished_ts'] = datetime.now().timestamp()
         _awg_plugin_active.pop((server_id, component), None)
         _awg_plugin_save()
+        # A plugin update recreates the AWG containers, which wipes Smart
+        # Route's table 200 and its accounting chains. Re-apply now instead of
+        # waiting for the next periodic pass: until then RU traffic leaves
+        # through the exit node. Never let this delay the operation result.
+        if op.get('state') in ('success', 'manual_step_required'):
+            asyncio.create_task(_smartroute_reconcile_after(server_id))
+
+
+async def _smartroute_reconcile_after(server_id):
+    try:
+        await smartroute_svc.reconcile(server_id)
+    except Exception as e:
+        logger.warning("Smart Route reconcile after plugin update failed: %s", e)
 
 
 @app.post('/api/servers/{server_id}/awg-plugin/update/{op_id}/cancel', tags=["Protocols"])
@@ -10019,7 +10374,8 @@ async def _run_xray_update(op, server_id, protocol, target):
         if not target:
             raise RuntimeError("cannot resolve the latest Xray-core release")
         result = await asyncio.to_thread(
-            manager.update_core, target, progress)
+            manager.update_core, target, progress,
+            ingress_ip=(server.get('ingress_ip') or None))
         if result.get('status') != 'success':
             raise RuntimeError(result.get('message') or 'update failed')
         op_log(op, 'done', f"Xray-core is now {result.get('version')}")
@@ -11611,6 +11967,97 @@ RESTORE_FORWARD_DELAY = 10
 # recreated container before clients notice.
 RESTORE_FORWARD_INTERVAL = 60
 
+# Smart Route self-heal. Recreating an AWG container (kernel/plugin upgrade,
+# docker restart, host reboot) wipes table 200 and the split accounting chains,
+# and the panel keeps believing the instance is split: Russian traffic silently
+# goes through the exit node until the host-side hourly timer re-applies the
+# list - and if that timer is stuck, never. The panel therefore reads the throw
+# count itself and re-applies a lost split right away. The startup pass covers
+# a panel restart; the loop covers container work done while the panel runs.
+SMARTR_RECONCILE_DELAY = 25
+SMARTR_RECONCILE_INTERVAL = 300
+
+# One-shot rewrite of the host timer installed by panels up to v1.8.14: they
+# wrote OnUnitActiveSec, a monotonic schedule that silently stops arming when
+# the service's activation stamp goes stale (ZK and MAMKAM, 2026-11-19: the
+# timer stayed "active" for 9 days without a single run). The unit is written
+# only at install time, so existing installations keep the broken timer forever
+# without this pass. Off switch for tests and for admins who manage the unit
+# themselves.
+SMARTR_TIMER_MIGRATION = os.environ.get(
+    'AWP_SMARTR_TIMER_MIGRATION', '1').lower() not in ('0', 'false', 'no', 'off')
+SMARTR_TIMER_MIGRATION_DELAY = 40      # after the reconcile pass and the boot probes
+SMARTR_TIMER_MIGRATION_KEY = 'smartroute_timer_v1'
+
+
+async def smartroute_timer_migration():
+    """Rewrite legacy Smart Route timers once, per host, fail-soft."""
+    if not SMARTR_TIMER_MIGRATION:
+        logger.info("Smart Route timer migration disabled by AWP_SMARTR_TIMER_MIGRATION")
+        return
+    await asyncio.sleep(SMARTR_TIMER_MIGRATION_DELAY)
+    try:
+        data = load_data()
+    except Exception as e:
+        logger.warning(f"Smart Route timer migration: cannot read data: {e}")
+        return
+    rec = (data.get('panel_migrations') or {}).get(SMARTR_TIMER_MIGRATION_KEY) or {}
+    if rec.get('done_at'):
+        return
+    try:
+        report = await smartroute_svc.migrate_timer()
+    except Exception as e:
+        logger.warning(f"Smart Route timer migration failed: {e}")
+        return
+    migrated = [r['server'] for r in report if r.get('state') == 'migrated']
+    failed = [r['server'] for r in report if str(r.get('state', '')).startswith('failed')]
+    if migrated:
+        logger.warning("Smart Route timer rewritten on: " + ', '.join(migrated))
+    if failed:
+        logger.warning("Smart Route timer migration still pending on: " + ', '.join(failed))
+    await _smartroute_timer_migration_finish(bool(failed), len(failed))
+
+
+async def _smartroute_timer_migration_finish(pending, count):
+    try:
+        async with DATA_LOCK:
+            data = load_data()
+            rec = (data.setdefault('panel_migrations', {})
+                   .setdefault(SMARTR_TIMER_MIGRATION_KEY, {}))
+            rec['last_attempt_at'] = datetime.now(timezone.utc).isoformat()
+            rec['pending'] = count
+            if not pending:
+                rec['done_at'] = rec['last_attempt_at']
+            save_data(data)
+    except Exception as e:
+        logger.warning(f"Smart Route timer migration: cannot record the result: {e}")
+
+
+async def smartroute_reconcile_pass():
+    """One self-heal round over every server with Smart Route installed."""
+    try:
+        report = await smartroute_svc.reconcile()
+    except Exception as e:
+        logger.warning(f"Smart Route reconcile pass failed: {e}")
+        return []
+    repaired = [r for r in report if r.get('repaired')]
+    for item in report:
+        if item.get('error'):
+            logger.warning(f"Smart Route reconcile: {item['server']}/"
+                           f"{item['protocol']}: {item['error']}")
+    if repaired:
+        logger.warning("Smart Route re-applied after container recreation: " +
+                       ', '.join(f"{r['server']}/{r['protocol']}" for r in repaired))
+    return report
+
+
+async def smartroute_reconcile_loop():
+    """Periodic self-heal. Never raises - the next round retries."""
+    await asyncio.sleep(SMARTR_RECONCILE_DELAY)
+    while True:
+        await smartroute_reconcile_pass()
+        await asyncio.sleep(SMARTR_RECONCILE_INTERVAL)
+
 
 async def restore_public_port_forwards():
     """Re-apply public-port DNAT rules on every server at panel startup.
@@ -12199,10 +12646,14 @@ def api_get_connections(request: Request, server_id: int, protocol: str = Query(
                         client['assigned_user'] = u['username']
                         client['assigned_user_id'] = uid
                     break
-        # Торрент-активность: события из журнала панели, привязка по tunnel-IP.
-        journal = _torrent_journal()
-        buckets = _torrent_peer_buckets(server, protocol, journal)
-        torrent_mode = _torrent_mode_of(server, protocol)
+        # Плагин «Защита от торрентов»: метки, режим и здоровье фильтра
+        # добавляются только когда он установлен на этом сервере. Иначе в
+        # ответе нет ни одного торрент-поля — ядро не отдаёт данные фичи,
+        # которой на сервере нет.
+        if not torrent_plugin.installed(server):
+            return {'clients': clients}
+        buckets = torrent_plugin.peer_buckets(server, protocol)
+        torrent_mode = torrent_plugin.mode_of(server, protocol)
         for client in clients:
             user_data = client.get('userData') or {}
             ip = user_data.get('clientIp') or ''
@@ -12223,7 +12674,7 @@ def api_get_connections(request: Request, server_id: int, protocol: str = Query(
                 client['torrentIp'] = ip
             client['torrentGuard'] = torrent_mode
         return {'clients': clients, 'torrent_guard': torrent_mode,
-                'torrent_guard_health': _torrent_health_for(server)}
+                'torrent_guard_health': torrent_plugin.health_for(server)}
     except Exception as e:
         logger.exception("Error getting connections")
         return JSONResponse({'error': str(e)}, status_code=500)
@@ -12282,11 +12733,16 @@ def api_add_connection(request: Request, server_id: int, req: AddConnectionReque
                 'client_id': result['client_id'],
                 'name': req.name,
                 'created_at': datetime.now().isoformat(),
-                'config_available': config_available,
-                'external_client': not config_available,
             }
             data['user_connections'].append(conn)
             save_data(data)
+            if protocol_base(req.protocol) == 'xray':
+                # Refresh the owner's subscription file right away; the
+                # periodic monitor covers every other change source.
+                try:
+                    auto_push_subscriptions(data, [req.user_id])
+                except Exception:
+                    logger.warning("subscription auto-push failed", exc_info=True)
 
         _invalidate_ip_status(server.get('uid'))
         return result
@@ -12439,226 +12895,312 @@ def api_clear_conn_warnings(request: Request, server_id: int, req: ConnectionAct
 
 
 
-class TorrentGuardServerRequest(BaseModel):
-    """Тумблер в карточке сервера: включить/выключить фильтр на всех инстансах."""
-    enabled: bool = True
+# ===== Плагин «Защита от торрентов»: API =====
+# Роуты плагина, а не ядра: без установки на сервере они отвечают 409, и
+# ядровых торрент-роутов в приложении больше нет.
 
-@app.get('/api/servers/torrent_flags', tags=["Servers"])
-def api_torrent_flags(request: Request):
-    """Метки торрент-активности по серверам — для плиток на главной.
+async def _torrent_plugin_body(request):
+    try:
+        payload = await request.json()
+    except Exception:                                   # noqa: BLE001
+        payload = None
+    return payload if isinstance(payload, dict) else {}
 
-    Синхронный (не async): чтение data.json и журнала блокировало бы event loop.
-    Отдаём только серверы, где есть события: пустые плитке не нужны.
+
+def _torrent_plugin_error(exc):
+    if isinstance(exc, TorrentPluginError):
+        return JSONResponse(exc.as_dict(), status_code=exc.status)
+    logger.exception('torrent plugin operation failed')
+    return JSONResponse({'error': str(exc) or 'operation failed',
+                         'code': 'internal_error'}, status_code=500)
+
+
+def _torrent_plugin_server(data, server_id):
+    if server_id < 0 or server_id >= len(data.get('servers', [])):
+        return None
+    return data['servers'][server_id]
+
+
+def _torrent_plugin_require_installed(server):
+    """409 до любого SSH: у неустановленного плагина нет ни правил, ни прав."""
+    if not torrent_plugin.installed(server):
+        raise TorrentPluginError('plugin_not_installed',
+                                 'Torrent guard plugin is not installed', 409)
+
+
+def _torrent_plugin_guards(server):
+    """Фабрика guard'ов и закрытие SSH. Без подходящих инстансов SSH не нужен.
+
+    Возвращает (factory, close). Фабрика вызывается только для инстансов,
+    которые сервис считает подходящими; всё остальное — явная ошибка.
     """
-    if not _check_admin(request):
-        return JSONResponse({'error': 'Forbidden'}, status_code=403)
-    data = load_data()
-    journal = _torrent_journal()
-    out = {}
-    for idx, server in enumerate(data.get('servers', [])):
-        summary = _torrent_summary_for(server, journal=journal)
-        if summary:
-            out[str(idx)] = summary
-    return {'flags': out}
+    if not torrent_plugin.capable(server, True):
+        def factory(proto):
+            raise TorrentPluginError(
+                'unsupported_protocol',
+                'Protocol %s does not support torrent guard' % proto, 400)
+        return factory, lambda: None
+    ssh = get_ssh(server)
+    ssh.connect()
 
+    def factory(proto):
+        manager = get_protocol_manager(ssh, proto)
+        make = getattr(manager, 'torrent_guard', None)
+        if not callable(make):
+            raise TorrentPluginError(
+                'unsupported_protocol',
+                'Protocol %s does not support torrent guard' % proto, 400)
+        return make(proto)
 
-@app.post('/api/servers/{server_id}/connections/torrent_guard', tags=["Connections"])
-def api_set_torrent_guard(request: Request, server_id: int, req: TorrentGuardRequest):
-    """Режим фильтра инстанса: on (считать+DROP) / count / off."""
-    if not _check_admin(request):
-        return JSONResponse({'error': 'Forbidden'}, status_code=403)
-    try:
-        data = load_data()
-        if server_id < 0 or server_id >= len(data['servers']):
-            return JSONResponse({'error': 'Server not found'}, status_code=404)
-        server = data['servers'][server_id]
-        proto = req.protocol or 'awg'
-        if protocol_base(proto) not in TORRENT_GUARD_PROTOCOLS:
-            return JSONResponse(
-                {'error': 'Protocol does not support torrent guard'},
-                status_code=400)
-        raw_mode = str(req.mode or '').strip().lower()
-        if raw_mode not in TORRENT_MODES:
-            # Иначе опечатка вроде "disable" молча включала бы блокировку.
-            return JSONResponse({'error': 'Unknown mode'}, status_code=400)
-        entry = (server.get('protocols') or {}).get(proto)
-        if not isinstance(entry, dict):
-            return JSONResponse({'error': 'Protocol not found'}, status_code=404)
-        mode = normalize_torrent_mode(raw_mode)
-        prev_mode = normalize_torrent_mode(
-            entry.get('torrent_guard') or TORRENT_DEFAULT_MODE)
-        entry['torrent_guard'] = mode
-        save_data(data)
-        apply_info = {'applied': False, 'error': ''}
-        ssh = None
+    def close():
         try:
-            ssh = get_ssh(server)
-            ssh.connect()
-            manager = get_protocol_manager(ssh, proto)
-            guard_factory = getattr(manager, 'torrent_guard', None)
-            if callable(guard_factory):
-                report = guard_factory(proto).apply(mode)
-                apply_info = {'applied': not report.get('error'),
-                              'error': report.get('error') or ''}
-            else:
-                apply_info['error'] = 'manager does not support torrent guard'
-        except Exception as e:                          # noqa: BLE001
-            # Исключение (нода недоступна, обрыв SFTP, sudo не принял пароль)
-            # не должно оставлять в data.json режим, которого нет в правилах.
-            logger.warning('torrent guard apply failed: %s', e)
-            apply_info = {'applied': False, 'error': str(e)}
-        finally:
-            if ssh is not None:
-                try:
-                    ssh.disconnect()
-                except Exception:                       # noqa: BLE001
-                    pass
-        if apply_info['error']:
-            # В data.json не должен остаться режим, который не применился:
-            # иначе селект показывает «включено», а правил нет.
-            fresh = load_data()
-            if server_id < len(fresh.get('servers', [])):
-                current = ((fresh['servers'][server_id].get('protocols')
-                            or {}).get(proto))
-                if isinstance(current, dict):
-                    current['torrent_guard'] = prev_mode
-                    save_data(fresh)
-            return {'status': 'error', 'mode': prev_mode, 'apply': apply_info}
-        return {'status': 'success', 'mode': mode, 'apply': apply_info}
-    except Exception as e:
-        logger.exception("Error setting torrent guard")
-        return JSONResponse({'error': str(e)}, status_code=500)
+            ssh.disconnect()
+        except Exception:                               # noqa: BLE001
+            pass
+
+    return factory, close
 
 
-@app.post('/api/servers/{server_id}/connections/torrent_clear', tags=["Connections"])
-def api_clear_torrent_events(request: Request, server_id: int,
-                             req: TorrentClearRequest):
-    """Снимает метку торрент-активности: по ключу, адресу или инстансу."""
-    if not _check_admin(request):
-        return JSONResponse({'error': 'Forbidden'}, status_code=403)
-    try:
-        data = load_data()
-        if server_id < 0 or server_id >= len(data['servers']):
-            return JSONResponse({'error': 'Server not found'}, status_code=404)
-        server = data['servers'][server_id]
-        key = torrent_events.server_key(server)
-        if not key:
-            return JSONResponse({'error': 'Server has no uid/host'},
-                                status_code=400)
-        with _TORRENT_EVENTS_LOCK:
-            journal = torrent_events.load(TORRENT_EVENTS_FILE)
-            removed = torrent_events.clear(
-                journal, key, req.protocol, ip=req.ip,
-                client_id=req.client_id)
-            if removed:
-                torrent_events.save(TORRENT_EVENTS_FILE, journal)
-        return {'status': 'success', 'removed': removed}
-    except Exception as e:
-        logger.exception("Error clearing torrent events")
-        return JSONResponse({'error': str(e)}, status_code=500)
-def _torrent_capable_protocols(server):
-    """Протоколы сервера, где фильтр вообще может работать (AWG/WG)."""
-    protocols = server.get('protocols') or {}
-    return [proto for proto, entry in protocols.items()
-            if protocol_base(proto) in TORRENT_GUARD_PROTOCOLS
-            and isinstance(entry, dict)]
-
-
-@app.get('/api/servers/{server_id}/torrent_guard', tags=["Servers"])
-def api_torrent_guard_state(request: Request, server_id: int):
-    """Состояние тумблера в карточке сервера (модалка управления)."""
+@app.get('/api/servers/{server_id}/plugins/torrent_guard', tags=["Servers"])
+def api_torrent_plugin_state(request: Request, server_id: int):
+    """Состояние плагина на сервере. Работает и без установки: 200 + installed=false."""
     if not _check_admin(request):
         return JSONResponse({'error': 'Forbidden'}, status_code=403)
     data = load_data()
-    if server_id < 0 or server_id >= len(data['servers']):
+    server = _torrent_plugin_server(data, server_id)
+    if server is None:
         return JSONResponse({'error': 'Server not found'}, status_code=404)
-    server = data['servers'][server_id]
-    protos = _torrent_capable_protocols(server)
-    modes = {proto: _torrent_mode_of(server, proto) for proto in protos}
-    enabled = (bool(server.get('torrent_guard_enabled', True))
-               and any(mode != 'off' for mode in modes.values()))
-    return {'server_id': server_id, 'supported': bool(protos),
-            'enabled': enabled, 'protocols': modes,
-            'health': _torrent_health_for(server)}
+    return torrent_plugin.status(server)
 
 
-@app.post('/api/servers/{server_id}/torrent_guard', tags=["Servers"])
-def api_torrent_guard_set(request: Request, server_id: int,
-                          req: TorrentGuardServerRequest):
-    """Включает/выключает фильтр на всех инстансах сервера одним тумблером.
+@app.get('/api/plugins/torrent_guard/flags', tags=["Servers"])
+def api_torrent_plugin_flags(request: Request):
+    """Метки торрент-активности для плиток — только по установленным серверам."""
+    if not _check_admin(request):
+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
+    data = load_data()
+    return {'flags': torrent_plugin.flags(data.get('servers', []))}
 
-    Выключение снимает правила (режим off) со всех AWG/WG-инстансов: метки
-    перестают появляться, DROP не работает. Включение возвращает режим on.
+
+async def _torrent_plugin_persist(server_id, changes, remove_mode_keys=False):
+    """Пишет только режимы плагина в СВЕЖИЙ data.json под DATA_LOCK.
+
+    SSH-операция длится секунды-минуты; держать всё это время снимок
+    data.json нельзя — параллельный писатель (пир, пользователь, другой
+    сервер) потерялся бы при сохранении старого снимка.
     """
+    if not changes and not remove_mode_keys:
+        return
+    async with DATA_LOCK:
+        data = load_data()
+        server = _torrent_plugin_server(data, server_id)
+        if server is None:
+            return
+        protocols = server.get('protocols') or {}
+        for proto, mode in (changes or {}).items():
+            entry = protocols.get(proto)
+            if not isinstance(entry, dict):
+                continue
+            if mode is None:
+                entry.pop('torrent_guard', None)
+            else:
+                entry['torrent_guard'] = mode
+        if remove_mode_keys:
+            server.pop('torrent_guard_enabled', None)
+        save_data(data)
+
+
+def _torrent_plugin_run(server, action):
+    """SSH-операция в отдельном потоке: sync-вызов из async роута вешает loop."""
+    factory, close = _torrent_plugin_guards(server)
+    try:
+        return action(factory)
+    finally:
+        close()
+
+
+async def _torrent_plugin_finish(server_id, result):
+    """Сохраняет изменения и отдаёт статус, посчитанный по свежим данным."""
+    await _torrent_plugin_persist(server_id,
+                                  result.get('changes') or {},
+                                  bool(result.get('remove_mode_keys')))
+    data = load_data()
+    server = _torrent_plugin_server(data, server_id)
+    status = torrent_plugin.status(server) if server is not None else result
+    status['errors'] = result.get('errors') or []
+    return status
+
+
+@app.post('/api/servers/{server_id}/plugins/torrent_guard/install', tags=["Servers"])
+async def api_torrent_plugin_install(request: Request, server_id: int):
+    if not _check_admin(request):
+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
+    body = await _torrent_plugin_body(request)
+    settings = body.get('settings') if isinstance(body.get('settings'), dict) else {}
+    reapply = bool(body.get('reapply'))
+    try:
+        data = load_data()
+        server = _torrent_plugin_server(data, server_id)
+        if server is None:
+            return JSONResponse({'error': 'Server not found'}, status_code=404)
+        # Валидация и «уже установлен» — до SSH.
+        if settings:
+            torrent_plugin.merge_settings(torrent_plugin.settings(server),
+                                          settings)
+        if torrent_plugin.installed(server) and not reapply:
+            status = torrent_plugin.status(server)
+            status['errors'] = []
+            return status
+        result = await asyncio.to_thread(
+            _torrent_plugin_run, server,
+            lambda factory: torrent_plugin.install(
+                server, factory, settings=settings, reapply=reapply))
+        return await _torrent_plugin_finish(server_id, result)
+    except Exception as exc:                            # noqa: BLE001
+        return _torrent_plugin_error(exc)
+
+
+@app.post('/api/servers/{server_id}/plugins/torrent_guard/uninstall', tags=["Servers"])
+async def api_torrent_plugin_uninstall(request: Request, server_id: int):
+    if not _check_admin(request):
+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
+    body = await _torrent_plugin_body(request)
+    try:
+        data = load_data()
+        server = _torrent_plugin_server(data, server_id)
+        if server is None:
+            return JSONResponse({'error': 'Server not found'}, status_code=404)
+        if not torrent_plugin.installed(server):
+            return torrent_plugin.status(server)
+        result = await asyncio.to_thread(
+            _torrent_plugin_run, server,
+            lambda factory: torrent_plugin.uninstall(
+                server, factory, force=bool(body.get('force'))))
+        result['remove_mode_keys'] = True
+        return await _torrent_plugin_finish(server_id, result)
+    except Exception as exc:                            # noqa: BLE001
+        return _torrent_plugin_error(exc)
+
+
+@app.post('/api/servers/{server_id}/plugins/torrent_guard/settings', tags=["Servers"])
+async def api_torrent_plugin_settings(request: Request, server_id: int):
+    if not _check_admin(request):
+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
+    body = await _torrent_plugin_body(request)
+    patch = body.get('settings') if isinstance(body.get('settings'), dict) \
+        else {k: v for k, v in body.items() if k != 'settings'}
+    try:
+        data = load_data()
+        server = _torrent_plugin_server(data, server_id)
+        if server is None:
+            return JSONResponse({'error': 'Server not found'}, status_code=404)
+        record = torrent_plugin.record(server)
+        if not record or not record.get('installed'):
+            raise TorrentPluginError('plugin_not_installed',
+                                     'Torrent guard plugin is not installed', 409)
+        # Валидация до SSH: кривая настройка не должна стоить коннекта.
+        torrent_plugin.merge_settings(record.get('settings') or {}, patch)
+        if torrent_plugin.excluded_wireguard(server, patch):
+            result = await asyncio.to_thread(
+                _torrent_plugin_run, server,
+                lambda factory: torrent_plugin.set_settings(server, factory, patch))
+        else:
+            result = await asyncio.to_thread(
+                torrent_plugin.set_settings, server, None, patch)
+        return await _torrent_plugin_finish(server_id, result)
+    except Exception as exc:                            # noqa: BLE001
+        return _torrent_plugin_error(exc)
+
+
+@app.post('/api/servers/{server_id}/plugins/torrent_guard/enabled', tags=["Servers"])
+async def api_torrent_plugin_enabled(request: Request, server_id: int):
+    if not _check_admin(request):
+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
+    body = await _torrent_plugin_body(request)
+    try:
+        data = load_data()
+        server = _torrent_plugin_server(data, server_id)
+        if server is None:
+            return JSONResponse({'error': 'Server not found'}, status_code=404)
+        _torrent_plugin_require_installed(server)
+        result = await asyncio.to_thread(
+            _torrent_plugin_run, server,
+            lambda factory: torrent_plugin.set_enabled(
+                server, factory, bool(body.get('enabled'))))
+        return await _torrent_plugin_finish(server_id, result)
+    except Exception as exc:                            # noqa: BLE001
+        return _torrent_plugin_error(exc)
+
+
+@app.post('/api/servers/{server_id}/plugins/torrent_guard/mode', tags=["Servers"])
+async def api_torrent_plugin_mode(request: Request, server_id: int):
+    if not _check_admin(request):
+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
+    body = await _torrent_plugin_body(request)
+    proto = str(body.get('protocol') or '')
+    mode = str(body.get('mode') or '').strip().lower()
+    try:
+        data = load_data()
+        server = _torrent_plugin_server(data, server_id)
+        if server is None:
+            return JSONResponse({'error': 'Server not found'}, status_code=404)
+        _torrent_plugin_require_installed(server)
+        # Параметры проверяем до SSH: неверный режим — это 400, а не 502.
+        if mode not in TORRENT_MODES:
+            raise TorrentPluginError('invalid_mode',
+                                     'Mode must be one of %s'
+                                     % ', '.join(TORRENT_MODES), 400)
+        if proto not in torrent_plugin.capable(server, True):
+            raise TorrentPluginError(
+                'unsupported_protocol',
+                'Protocol %s does not support torrent guard' % proto, 400)
+        result = await asyncio.to_thread(
+            _torrent_plugin_run, server,
+            lambda factory: torrent_plugin.set_mode(server, factory, proto, mode))
+        return await _torrent_plugin_finish(server_id, result)
+    except Exception as exc:                            # noqa: BLE001
+        return _torrent_plugin_error(exc)
+
+
+@app.post('/api/servers/{server_id}/plugins/torrent_guard/refresh', tags=["Servers"])
+def api_torrent_plugin_refresh(request: Request, server_id: int):
     if not _check_admin(request):
         return JSONResponse({'error': 'Forbidden'}, status_code=403)
     try:
         data = load_data()
-        if server_id < 0 or server_id >= len(data['servers']):
+        server = _torrent_plugin_server(data, server_id)
+        if server is None:
             return JSONResponse({'error': 'Server not found'}, status_code=404)
-        server = data['servers'][server_id]
-        protos = _torrent_capable_protocols(server)
-        if not protos:
-            return JSONResponse(
-                {'error': 'Server has no AWG/WireGuard instances'},
-                status_code=400)
-        mode = 'on' if req.enabled else 'off'
-        previous = {proto: _torrent_mode_of(server, proto) for proto in protos}
-        for proto in protos:
-            server['protocols'][proto]['torrent_guard'] = mode
-        server['torrent_guard_enabled'] = bool(req.enabled)
-        save_data(data)
-        applied = 0
-        errors = []
-        ssh = None
+        _torrent_plugin_require_installed(server)
+        factory, close = _torrent_plugin_guards(server)
         try:
-            ssh = get_ssh(server)
-            ssh.connect()
-            for proto in protos:
-                try:
-                    manager = get_protocol_manager(ssh, proto)
-                    factory = getattr(manager, 'torrent_guard', None)
-                    if not callable(factory):
-                        errors.append('%s: not supported' % proto)
-                        continue
-                    report = factory(proto).apply(mode)
-                    if report.get('error'):
-                        errors.append('%s: %s' % (proto, report['error']))
-                        _torrent_set_health(server, proto, report)
-                    else:
-                        applied += 1
-                except Exception as e:                  # noqa: BLE001
-                    errors.append('%s: %s' % (proto, e))
-        except Exception as e:                          # noqa: BLE001
-            errors.append(str(e))
+            result = torrent_plugin.refresh(server, factory)
         finally:
-            if ssh is not None:
-                try:
-                    ssh.disconnect()
-                except Exception:                       # noqa: BLE001
-                    pass
-        if errors and not applied:
-            # Ни один инстанс не принял режим — возвращаем прежнее состояние,
-            # чтобы карточка не показывала «выключено» без реального эффекта.
-            fresh = load_data()
-            if server_id < len(fresh.get('servers', [])):
-                target = fresh['servers'][server_id]
-                for proto, prev in previous.items():
-                    entry = (target.get('protocols') or {}).get(proto)
-                    if isinstance(entry, dict):
-                        entry['torrent_guard'] = prev
-                target['torrent_guard_enabled'] = bool(
-                    any(prev != 'off' for prev in previous.values()))
-                save_data(fresh)
-            return JSONResponse({'status': 'error', 'enabled': req.enabled,
-                                 'applied': 0, 'errors': errors},
-                                status_code=502)
-        return {'status': 'success', 'enabled': req.enabled,
-                'applied': applied, 'errors': errors,
-                'health': _torrent_health_for(server)}
-    except Exception as e:
-        logger.exception("Error toggling torrent guard for server")
-        return JSONResponse({'error': str(e)}, status_code=500)
+            close()
+        return result
+    except Exception as exc:                            # noqa: BLE001
+        return _torrent_plugin_error(exc)
+
+
+@app.post('/api/servers/{server_id}/plugins/torrent_guard/marks/clear', tags=["Servers"])
+async def api_torrent_plugin_marks_clear(request: Request, server_id: int):
+    if not _check_admin(request):
+        return JSONResponse({'error': 'Forbidden'}, status_code=403)
+    body = await _torrent_plugin_body(request)
+    try:
+        data = load_data()
+        server = _torrent_plugin_server(data, server_id)
+        if server is None:
+            return JSONResponse({'error': 'Server not found'}, status_code=404)
+        _torrent_plugin_require_installed(server)
+        removed = torrent_plugin.clear_marks(
+            server, str(body.get('protocol') or ''),
+            str(body.get('client_id') or ''), str(body.get('ip') or ''))
+        return {'status': 'success', 'removed': removed}
+    except Exception as exc:                            # noqa: BLE001
+        return _torrent_plugin_error(exc)
+
+
 @app.post('/api/servers/{server_id}/connections/rename', tags=["Connections"])
 @serialize_peer_lifecycle
 async def api_rename_connection(request: Request, server_id: int, req: RenameConnectionRequest):
@@ -13328,6 +13870,8 @@ async def api_add_user_connection(request: Request, user_id: str, req: AddUserCo
                 'client_id': result['client_id'],
                 'name': req.name,
                 'created_at': datetime.now().isoformat(),
+                'config_available': config_available,
+                'external_client': not config_available,
             }
             data = load_data()
             data['user_connections'].append(conn)
@@ -13905,8 +14449,8 @@ def settings_page(request: Request):
         cheburcheck_targets=_cheburcheck_targets_context(data),
         subscription_settings=subscription_settings(data),
         subscription_servers=[
-            {'id': index, 'label': server.get('name') or server.get('host')}
-            for index, server in enumerate(data.get('servers', []))
+            {'uid': server.get('uid'), 'label': server.get('name') or server.get('host')}
+            for server in data.get('servers', [])
             if any(protocol_base(key) == 'nginx'
                    for key in (server.get('protocols') or {}))
         ],
@@ -13924,8 +14468,16 @@ def subscription_settings(data):
         path = normalize_subscription_path(settings.get('path'))
     except ValueError:
         path = 'sub'
+    # server_uid is the stable reference (indexes shift when servers are
+    # deleted or reordered). Legacy settings stored a list index - resolve
+    # it once here; the next settings save persists the uid.
+    server_uid = settings.get('server_uid')
+    if not server_uid:
+        legacy = settings.get('server_id')
+        if isinstance(legacy, int) and 0 <= legacy < len(data.get('servers', [])):
+            server_uid = data['servers'][legacy].get('uid')
     return {'enabled': bool(settings.get('enabled')),
-            'server_id': settings.get('server_id'),
+            'server_uid': server_uid,
             'path': path,
             'name': normalize_subscription_name(settings.get('name'))}
 
@@ -13950,20 +14502,72 @@ def _subscription_profile_title(name):
     return 'base64:' + base64.b64encode(name.encode()).decode()
 
 
-def _subscription_config_block(sub_path, profile_title):
-    return (
-        "\n    # === panel subscription (managed) ===\n"
-        f"    location /{sub_path}/ {{\n"
-        f"        add_header profile-title \"{profile_title}\" always;\n"
-        f"        add_header profile-update-interval \"24\" always;\n"
-        f"        try_files $uri =404;\n"
-        f"    }}\n"
-        "    # === end panel subscription block ===\n"
-    )
+def _nginx_quote(value):
+    """Escape a value for an nginx double-quoted config string."""
+    value = str(value).replace(chr(92), chr(92) * 2)
+    value = value.replace(chr(34), chr(92) + chr(34))
+    return value
+
+
+def _subscription_userinfo(user):
+    """subscription-userinfo header value: the user's used quota and
+    expiry, as of the last push. Clients render it as a traffic bar."""
+    parts = ['upload=0']
+    used = user.get('traffic_used')
+    if isinstance(used, int) and used >= 0:
+        parts.append('download=' + str(used))
+    limit = user.get('traffic_limit')
+    if isinstance(limit, int) and limit > 0:
+        parts.append('total=' + str(limit))
+    expires = user.get('expiration_date')
+    if expires:
+        try:
+            ts = int(datetime.fromisoformat(str(expires)).timestamp())
+            if ts > 0:
+                parts.append('expire=' + str(ts))
+        except (ValueError, TypeError):
+            pass
+    return '; '.join(parts)
+
+
+def _subscription_config_entries(data):
+    """[(token, userinfo), ...] for users with a token and xray targets."""
+    entries = []
+    for user in data.get('users', []):
+        token = user.get('sub_token')
+        if not token or not _subscription_user_targets(data, user):
+            continue
+        entries.append((token, _subscription_userinfo(user)))
+    return entries
+
+
+def _subscription_config_block(sub_path, profile_title, entries=()):
+    """Per-token exact-match locations carry the per-user userinfo
+    header (values as of the last push); the generic prefix location
+    keeps serving the mask site for unknown tokens."""
+    nl = chr(10)
+    lines = [nl + '    # === panel subscription (managed) ===']
+    for token, userinfo in entries:
+        lines.append(f'    location = /{sub_path}/{token} ' + chr(123))
+        lines.append('        add_header subscription-userinfo "'
+                     + _nginx_quote(userinfo) + '" always;')
+        lines.append('        add_header profile-title "'
+                     + _nginx_quote(profile_title) + '" always;')
+        lines.append('        add_header profile-update-interval "6" always;')
+        lines.append('        try_files $uri =404;')
+        lines.append('    ' + chr(125))
+    lines.append(f'    location /{sub_path}/ ' + chr(123))
+    lines.append('        add_header profile-title "'
+                 + _nginx_quote(profile_title) + '" always;')
+    lines.append('        add_header profile-update-interval "6" always;')
+    lines.append('        try_files $uri =404;')
+    lines.append('    ' + chr(125))
+    lines.append('    # === end panel subscription block ===')
+    return nl.join(lines) + nl
 
 
 def _apply_subscription_config_text(config, sub_path='sub', profile_title='',
-                                    remove=False):
+                                    entries=(), remove=False):
     """Inject/replace/remove the managed subscription location inside the
     last server block of the mask site config (pure text, testable)."""
     cleaned = re.sub(r"\n?[ \t]*# === panel subscription \(managed\) ===.*?"
@@ -13974,14 +14578,14 @@ def _apply_subscription_config_text(config, sub_path='sub', profile_title='',
     index = cleaned.rstrip().rfind('}')
     if index == -1:
         raise RuntimeError('unexpected NGINX config shape')
-    return cleaned[:index] + _subscription_config_block(sub_path, profile_title) \
-        + cleaned[index:]
+    return cleaned[:index] + _subscription_config_block(sub_path, profile_title, entries) + cleaned[index:]
 
 
 def _apply_subscription_config(nginx_server, nginx_protocol, sub_settings,
-                               remove=False):
+                               entries=(), remove=False):
     """Apply the managed subscription location on the live mask (nginx -t
-    validated by save_server_config, which reverts on failure)."""
+    validated by save_server_config, which reverts on failure). Skips the
+    write when the live config already matches."""
     from managers.nginx_manager import NginxManager
     ssh = get_ssh(nginx_server)
     ssh.connect()
@@ -13991,7 +14595,9 @@ def _apply_subscription_config(nginx_server, nginx_protocol, sub_settings,
         new_config = _apply_subscription_config_text(
             config, sub_settings['path'],
             _subscription_profile_title(sub_settings.get('name')),
-            remove=remove)
+            entries=entries, remove=remove)
+        if new_config == config:
+            return False
         return nginx.save_server_config(nginx_protocol, new_config)
     finally:
         ssh.disconnect()
@@ -13999,14 +14605,15 @@ def _apply_subscription_config(nginx_server, nginx_protocol, sub_settings,
 
 def subscription_nginx_server(data, sub_settings):
     """The NGINX server chosen as the subscription file host, or None."""
-    server_id = sub_settings.get('server_id')
-    if not isinstance(server_id, int) or not 0 <= server_id < len(data.get('servers', [])):
+    server_uid = sub_settings.get('server_uid')
+    if not server_uid:
         return None
-    server = data['servers'][server_id]
-    if not any(protocol_base(key) == 'nginx'
-               for key in (server.get('protocols') or {})):
-        return None
-    return server
+    for server in data.get('servers', []):
+        if (server.get('uid') == server_uid
+                and any(protocol_base(key) == 'nginx'
+                        for key in (server.get('protocols') or {}))):
+            return server
+    return None
 
 
 def ensure_subscription_token(user):
@@ -14120,9 +14727,12 @@ def auto_push_subscriptions(data, user_ids=None):
     tokens and cached sub URLs via save_data."""
     sub_settings = subscription_settings(data)
     if not sub_settings['enabled']:
+        logger.debug("subscription auto-push skipped: disabled")
         return
     nginx_server = subscription_nginx_server(data, sub_settings)
     if nginx_server is None:
+        logger.warning("subscription auto-push skipped: no NGINX host "
+                       "selected or the selected server has no NGINX")
         return
     domain = _subscription_mask_domain(nginx_server)
     users_by_id = {u.get('id'): u for u in data.get('users', [])}
@@ -14131,6 +14741,7 @@ def auto_push_subscriptions(data, user_ids=None):
                    if _subscription_user_targets(data, u)]
     else:
         targets = [users_by_id[uid] for uid in user_ids if uid in users_by_id]
+    updated = 0
     for user in targets:
         if not _subscription_user_targets(data, user):
             user.pop('sub_url', None)  # all xray connections are gone
@@ -14141,9 +14752,24 @@ def auto_push_subscriptions(data, user_ids=None):
             if domain:
                 user['sub_url'] = (f"https://{domain}/{sub_settings['path']}/"
                                    f"{token}")
+            if not unchanged:
+                updated += 1
         except Exception as e:
             logger.warning("subscription auto-push failed for %s: %s",
                            user.get('username'), e)
+    if updated:
+        logger.info("subscription auto-push: %d file(s) updated", updated)
+    # The per-token userinfo headers live in the mask config: refresh them
+    # with the fresh counters (skipped internally when nothing changed).
+    try:
+        nginx_key = next((key for key in (nginx_server.get('protocols') or {})
+                          if protocol_base(key) == 'nginx'), None)
+        if nginx_key:
+            _apply_subscription_config(
+                nginx_server, nginx_key, sub_settings,
+                entries=_subscription_config_entries(data))
+    except Exception:
+        logger.warning("subscription userinfo refresh failed", exc_info=True)
     save_data(data)
 
 
@@ -14174,6 +14800,16 @@ def push_all_subscriptions(data):
         except Exception as e:
             errors.append(f"{user.get('username')}: {e}")
     _subscription_prune_stale_files(data, nginx_server, sub_settings, valid_tokens)
+    # Refresh the per-token userinfo headers with the fresh counters.
+    try:
+        nginx_key = next((key for key in (nginx_server.get('protocols') or {})
+                          if protocol_base(key) == 'nginx'), None)
+        if nginx_key:
+            _apply_subscription_config(
+                nginx_server, nginx_key, sub_settings,
+                entries=_subscription_config_entries(data))
+    except Exception:
+        logger.warning("subscription userinfo refresh failed", exc_info=True)
     return {'pushed': pushed, 'errors': errors,
             'path': sub_settings['path'], 'domain': domain}
 
@@ -14204,7 +14840,7 @@ def _subscription_prune_stale_files(data, nginx_server, sub_settings,
 
 class SubscriptionSettingsRequest(BaseModel):
     enabled: bool = False
-    server_id: Optional[int] = None
+    server_uid: Optional[str] = None
     path: Optional[str] = None
     name: Optional[str] = None
 
@@ -14240,13 +14876,14 @@ def api_subscription_settings_save(request: Request, req: SubscriptionSettingsRe
         old = subscription_settings(data)
         if req.enabled:
             probe = subscription_nginx_server(
-                data, {'enabled': True, 'server_id': req.server_id})
+                data, {'enabled': True, 'server_uid': req.server_uid})
             if probe is None:
                 return JSONResponse(
                     {'error': 'Select a server with NGINX installed'}, status_code=400)
         settings = data.setdefault('settings', {}).setdefault('subscription', {})
         settings['enabled'] = req.enabled
-        settings['server_id'] = req.server_id
+        settings['server_uid'] = req.server_uid
+        settings.pop('server_id', None)  # legacy index format
         settings['path'] = sub_path
         settings['name'] = sub_name
         save_data(data)
@@ -14256,14 +14893,15 @@ def api_subscription_settings_save(request: Request, req: SubscriptionSettingsRe
             nginx_key = next(key for key in (probe.get('protocols') or {})
                              if protocol_base(key) == 'nginx')
             _apply_subscription_config(probe, nginx_key,
-                                       subscription_settings(data))
+                                       subscription_settings(data),
+                                       entries=_subscription_config_entries(data))
             outcome = push_all_subscriptions(data)
             save_data(data)  # freshly minted sub tokens
             result['pushed'] = outcome['pushed']
             result['errors'] = outcome['errors']
             result['domain'] = outcome.get('domain')
         elif old['enabled']:
-            old_server = subscription_nginx_server(data, {'server_id': old['server_id']})
+            old_server = subscription_nginx_server(data, {'server_uid': old['server_uid']})
             nginx_key = next((key for key in (old_server.get('protocols') or {})
                               if protocol_base(key) == 'nginx'), None) \
                 if old_server is not None else None
@@ -14468,9 +15106,14 @@ async def api_warp_disconnect(request: Request):
 #     return {'status': 'success'}
 
 @app.post('/api/settings/save', tags=["Settings"])
-def save_settings(request: Request, payload: SaveSettingsRequest):
+async def save_settings(request: Request, payload: SaveSettingsRequest):
     if not _check_admin(request):
         return JSONResponse({'error': 'Forbidden'}, status_code=403)
+    async with DATA_LOCK:
+        return await _save_settings(request, payload)
+
+
+async def _save_settings(request: Request, payload: SaveSettingsRequest):
     data = load_data()
     settings = data.setdefault('settings', {})
     settings['appearance'] = payload.appearance.dict()
@@ -14486,7 +15129,11 @@ def save_settings(request: Request, payload: SaveSettingsRequest):
     telegram_exit_uid = (payload.telegram.exit_uid or '').strip()
     if telegram_exit_uid and not any(n.get('uid') == telegram_exit_uid for n in exit_link_svc.list_exit_nodes(data)):
         return JSONResponse({'error': 'telegram_exit_not_available'}, status_code=400)
+    previous_telegram = dict(settings.get('telegram') or {})
     settings['telegram'] = payload.telegram.dict()
+    # Only the lifecycle endpoint changes intent. Old/stale settings pages may
+    # still submit enabled based on runtime state; never let that disable boot.
+    settings['telegram']['enabled'] = bool(previous_telegram.get('enabled'))
     settings['telegram']['exit_uid'] = telegram_exit_uid
     settings['ssl'] = payload.ssl.dict()
     settings['mail'] = merge_mail_settings(settings.get('mail'), payload.mail.dict())
@@ -14566,18 +15213,15 @@ def save_settings(request: Request, payload: SaveSettingsRequest):
                 pass
     logger.info("Settings saved (including captcha, telegram and auto backup)")
 
-    # Handle bot start/stop based on new telegram settings
-    tg_cfg = payload.telegram
-    if tg_cfg.enabled and tg_cfg.token:
-        if not tg_bot.is_running():
-            logger.info("Starting Telegram bot (settings save)...")
-            tg_bot.launch_bot(tg_cfg.token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, credential_resolver=lambda server: _credential_store().resolve(server), http_client_factory=lambda: TelegramExitHTTPClient(load_data, ssh_factory=lambda server: _ssh_manager_for(server, load_data())))
-    else:
-        if tg_bot.is_running():
-            logger.info("Stopping Telegram bot (settings save)...")
-            asyncio.create_task(tg_bot.stop_bot())
+    # This handler runs on the application loop: launch_bot uses create_task.
+    tg_cfg = settings['telegram']
+    if previous_telegram.get('token') != tg_cfg.get('token') or not tg_cfg.get('token') or not tg_cfg['enabled']:
+        await tg_bot.stop_bot()
+    if tg_cfg['enabled'] and tg_cfg.get('token') and not tg_bot.is_running():
+        tg_bot.launch_bot(tg_cfg['token'], load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, credential_resolver=lambda server: _credential_store().resolve(server), http_client_factory=lambda: TelegramExitHTTPClient(load_data, ssh_factory=lambda server: _ssh_manager_for(server, load_data())))
 
-    return {"status": "success", "bot_running": tg_bot.is_running(), "warnings": warnings}
+    return {"status": "success", "bot_running": tg_bot.is_running(),
+            "bot_enabled": tg_cfg['enabled'], "warnings": warnings}
 
 
 # ----- DuckDNS: free domain + one-click auto-renewed Let's Encrypt cert -----
@@ -14738,28 +15382,30 @@ def _start_duckdns_monitor():
 
 
 @app.post('/api/settings/telegram/toggle', tags=["Settings"])
-async def api_telegram_toggle(request: Request):
-    """Quick enable/disable of the bot without a full settings save."""
+async def api_telegram_toggle(request: Request, payload: Optional[TelegramToggleRequest] = None):
+    """Persist explicit intent, independently of whether the task is alive.
+
+    An empty POST remains supported for older clients, toggling saved intent.
+    """
     if not _check_admin(request):
         return JSONResponse({'error': 'Forbidden'}, status_code=403)
-    data = load_data()
-    tg_cfg = data.get('settings', {}).get('telegram', {})
-    token = tg_cfg.get('token', '')
-    if not token:
-        return JSONResponse({'error': 'Telegram token not set in settings'}, status_code=400)
+    async with DATA_LOCK:
+        data = load_data()
+        tg_cfg = data.setdefault('settings', {}).setdefault('telegram', {})
+        enabled = payload.enabled if payload is not None else not bool(tg_cfg.get('enabled'))
+        token = tg_cfg.get('token', '')
+        if enabled and not token:
+            return JSONResponse({'error': 'Telegram token not set in settings'}, status_code=400)
+        tg_cfg['enabled'] = enabled
+        save_data(data)
+        if enabled:
+            if not tg_bot.is_running():
+                tg_bot.launch_bot(token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, credential_resolver=lambda server: _credential_store().resolve(server), http_client_factory=lambda: TelegramExitHTTPClient(load_data, ssh_factory=lambda server: _ssh_manager_for(server, load_data())))
+        else:
+            await tg_bot.stop_bot()
+        return {'status': 'started' if enabled else 'stopped',
+                'bot_enabled': enabled, 'bot_running': tg_bot.is_running()}
 
-    if tg_bot.is_running():
-        await tg_bot.stop_bot()
-        tg_cfg['enabled'] = False
-        data['settings']['telegram'] = tg_cfg
-        save_data(data)
-        return {'status': 'stopped', 'bot_running': False}
-    else:
-        tg_bot.launch_bot(token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, credential_resolver=lambda server: _credential_store().resolve(server), http_client_factory=lambda: TelegramExitHTTPClient(load_data, ssh_factory=lambda server: _ssh_manager_for(server, load_data())))
-        tg_cfg['enabled'] = True
-        data['settings']['telegram'] = tg_cfg
-        save_data(data)
-        return {'status': 'started', 'bot_running': True}
 
 @app.post('/api/settings/sync_now', tags=["Settings"])
 async def api_sync_now(request: Request):
