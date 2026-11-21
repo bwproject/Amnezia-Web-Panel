@@ -1,6 +1,6 @@
 --- a/templates/users.html
 +++ b/templates/users.html
-@@ -1047,22 +1047,26 @@
+@@ -1076,22 +1076,26 @@
              if (mode === 'existing') {
                  const selected = [...document.getElementById('ucExistingClient').selectedOptions]
                      .map(o => o.value).filter(Boolean);
@@ -31,7 +31,7 @@
                  refreshUsersList();
                  const connsModal = document.getElementById('userConnsModal');
                  if (connsModal.classList.contains('active') && currentConnsUserId === currentUserId) {
-@@ -1184,9 +1188,11 @@
+@@ -1213,9 +1217,11 @@
                              </div>
                          </div>
                          <div class="client-actions">

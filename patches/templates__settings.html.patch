@@ -1,6 +1,6 @@
 --- a/templates/settings.html
 +++ b/templates/settings.html
-@@ -96,3 +96,10 @@
+@@ -103,3 +103,10 @@
                      <p class="form-hint">{{ _('telegram_webapp_auth_desc') }}</p>
                  </div>
 +                <div class="form-group">
