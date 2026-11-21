@@ -9,7 +9,7 @@
      SmartRouteManager,
      normalize_cidrs,
  )
-@@ -145,7 +147,9 @@
+@@ -161,7 +163,9 @@
              server = self._resolve_identity(self.load_data(), identity)
              rec = (server.get('protocols') or {}).get(protocol) or {}
              link = rec.get('exit_link') or {}
@@ -20,7 +20,7 @@
              if enabled:
                  if 'smart_route_prev_dns' not in link:
                      current = await asyncio.to_thread(awg._read_config_key, protocol, 'DNS')
-@@ -171,16 +175,19 @@
+@@ -187,16 +191,19 @@
  
      def _entry(self, data, server_id, protocol):
          server = self._server(data, server_id)
@@ -44,7 +44,7 @@
  
      async def _smartr(self, server):
          return SmartRouteManager(await asyncio.to_thread(self.get_ssh, server))
-@@ -190,6 +197,8 @@
+@@ -206,6 +213,8 @@
          return f"{AWG_DEFAULTS['subnet_ip']}/{AWG_DEFAULTS['subnet_cidr']}"
  
      async def _container_ctx(self, awg, protocol):
@@ -53,7 +53,7 @@
          return (awg._container_name(protocol),
                  awg._resolve_config_path(protocol),
                  SmartRouteService._subnet_default())
-@@ -281,10 +290,13 @@
+@@ -297,10 +306,13 @@
          rollback_failed = []
          for proto, _link in splits:
              try:
@@ -71,7 +71,7 @@
                  await self._apply_dns_for_split(identity, proto, False)
              except Exception as err:
                  logger.warning("smartroute rollback of %s failed: %s", proto, err)
-@@ -324,7 +336,9 @@
+@@ -340,7 +352,9 @@
          # 4) Normalize the link state (conntrack flush via x_exit_sync).
          for proto, _ in splits:
              try:
@@ -82,7 +82,7 @@
                  await asyncio.to_thread(awg._exit_apply, proto)
              except Exception as err:
                  logger.warning("exit re-sync after smartroute uninstall of %s failed: %s", proto, err)
-@@ -368,16 +382,19 @@
+@@ -384,16 +398,19 @@
          if bool(sm.get('enabled', True)) == enabled:
              return {'status': 'success', 'enabled': enabled, 'unchanged': True}
  
@@ -107,7 +107,7 @@
                  applied.append(proto)
                  await self._apply_dns_for_split(identity, proto, enabled)
              except Exception as err:
-@@ -431,7 +448,9 @@
+@@ -447,7 +464,9 @@
          applied, failed = [], []
          for proto, _link in self._split_instances_of(server):
              try:
@@ -118,7 +118,7 @@
                  await asyncio.to_thread(awg.update_awg_settings, proto, dns=pair)
                  applied.append(proto)
              except Exception as err:
-@@ -462,9 +481,12 @@
+@@ -478,9 +497,12 @@
          # Refresh every split instance so the new subnets take effect now.
          for proto, _link in self._split_instances_of(server):
              try:
@@ -134,7 +134,7 @@
              except Exception as err:
                  logger.warning("smartroute refresh of %s after own-subnet change failed: %s", proto, err)
          return {'status': 'success', 'own_subnets': normalized}
-@@ -487,13 +509,16 @@
+@@ -503,13 +525,16 @@
              return {'status': 'success', 'smart_route': enabled, 'unchanged': True}
  
          async with self._locks[(server.get('uid', server_id), protocol)]:
@@ -157,7 +157,7 @@
  
              def mutate(lk):
                  lk['smart_route'] = enabled
-@@ -541,8 +566,11 @@
+@@ -808,8 +833,11 @@
          server, _rec, link = self._entry(data, server_id, protocol)
          if not link.get('smart_route'):
              return {'enabled': False}
