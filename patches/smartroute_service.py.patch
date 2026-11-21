@@ -1,12 +1,10 @@
 --- a/smartroute_service.py
 +++ b/smartroute_service.py
-@@ -12,6 +12,8 @@
- import asyncio
- import logging
- import threading
+@@ -19,2 +19,4 @@
+ from managers.awg_manager import AWG_DEFAULTS
 +from managers.wireguard_exit_manager import WireGuardExitManager
 +from bw_wg_awg_transport import WG_CONTAINER, WG_CONFIG
- from collections import defaultdict
+ from managers.smartroute_manager import (
  
  from managers.awg_manager import AWG_DEFAULTS
 @@ -145,7 +147,9 @@

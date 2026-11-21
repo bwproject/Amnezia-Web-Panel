@@ -176,10 +176,7 @@
              } else if (protoBase(currentInstallProto) === 'socks5') {
                  params.socks5_username = document.getElementById('installSocks5User').value || 'proxy_user';
                  params.socks5_password = document.getElementById('installSocks5Pass').value || '';
-@@ -7581,6 +7662,50 @@
-         }
-     }
- 
+@@ -8019,1 +8019,45 @@
 +    async function openHttpProxySettings(proto = 'http_proxy') {
 +        try {
 +            const data = await apiCall(`/api/servers/${SERVER_ID}/http-proxy/credentials?protocol=${encodeURIComponent(proto)}`);
@@ -225,8 +222,5 @@
 +    }
 +
      async function openSocks5Settings(proto = 'socks5') {
-         currentSocks5Proto = proto || 'socks5';
-         try {
-
 --- a/templates/server.html
 +++ b/templates/server.html
