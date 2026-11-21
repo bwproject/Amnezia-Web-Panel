@@ -1,12 +1,12 @@
 --- a/app.py
 +++ b/app.py
 @@ -15072,3 +15072,3 @@
-    if tg_cfg['enabled'] and tg_cfg.get('token') and not tg_bot.is_running():
+     if tg_cfg['enabled'] and tg_cfg.get('token') and not tg_bot.is_running():
 -        tg_bot.launch_bot(tg_cfg['token'], load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, credential_resolver=lambda server: _credential_store().resolve(server))
 +        tg_bot.launch_bot(tg_cfg['token'], load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, credential_resolver=lambda server: _credential_store().resolve(server), http_client_factory=lambda: TelegramExitHTTPClient(load_data, ssh_factory=lambda server: _ssh_manager_for(server, load_data())))
  
 @@ -15254,3 +15254,3 @@
-            if not tg_bot.is_running():
+             if not tg_bot.is_running():
 -                tg_bot.launch_bot(token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, credential_resolver=lambda server: _credential_store().resolve(server))
 +                tg_bot.launch_bot(token, load_data, generate_vpn_link, save_data, self_service_svc=self_service_connections, credential_resolver=lambda server: _credential_store().resolve(server), http_client_factory=lambda: TelegramExitHTTPClient(load_data, ssh_factory=lambda server: _ssh_manager_for(server, load_data())))
-        else:
+         else:
